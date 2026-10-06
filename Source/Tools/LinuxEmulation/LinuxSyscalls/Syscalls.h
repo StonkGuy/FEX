@@ -14,6 +14,7 @@ $end_info$
 #include "LinuxSyscalls/LinuxAllocator.h"
 #include "LinuxSyscalls/ThreadManager.h"
 #include "LinuxSyscalls/Seccomp/SeccompEmulator.h"
+#include "LinuxSyscalls/SMCHotPages.h"
 #include "LinuxSyscalls/SyscallsVMATracking.h"
 #include "ArchHelpers/MContext.h"
 
@@ -203,6 +204,7 @@ public:
   FEX_CONFIG_OPT(RootFSPath, ROOTFS);
   FEX_CONFIG_OPT(Is64BitMode, IS64BIT_MODE);
   FEX_CONFIG_OPT(SMCChecks, SMCCHECKS);
+  FEX_CONFIG_OPT(SMCHotPageFaults, SMCHOTPAGEFAULTS);
   FEX_CONFIG_OPT(NeedsSeccomp, NEEDSSECCOMP);
   FEX_CONFIG_OPT(EnableCodeCaching, ENABLECODECACHINGWIP);
   FEX_CONFIG_OPT(EnableDiskCache, DISKCACHE);
@@ -288,6 +290,7 @@ public:
   ///// VMA (Virtual Memory Area) tracking /////
   static bool HandleSegfault(FEXCore::Core::InternalThreadState* Thread, int Signal, void* info, void* ucontext);
   void MarkGuestExecutableRange(FEXCore::Core::InternalThreadState* Thread, uint64_t Start, uint64_t Length) override;
+  bool IsSMCHotPage(uint64_t Address) override;
   void InvalidateGuestCodeRange(FEXCore::Core::InternalThreadState* Thread, uint64_t Start, uint64_t Length) override;
   std::optional<FEXCore::ExecutableFileSectionInfo>
   LookupExecutableFileSection(FEXCore::Core::InternalThreadState* Thread, uint64_t GuestAddr) final override;
@@ -361,6 +364,9 @@ private:
   std::mutex SyscallMutex;
   // std::mutex CodeCachePatchingMutex;
   FEXCore::ForkableUniqueMutex CodeCachePatchingMutex;
+
+  // Pages that keep taking SMC write faults; verified by the JIT instead of being write-protected.
+  SMCHotPageTracker SMCHotPages;
 
   FEX::CodeLoader* LocalLoader {};
   bool NeedToCheckXID {true};

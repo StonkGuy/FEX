@@ -33,6 +33,16 @@ public:
   virtual void HandleSyscall(FEXCore::Core::CpuStateFrame* Frame) = 0;
 
   virtual void MarkGuestExecutableRange(FEXCore::Core::InternalThreadState* Thread, uint64_t Start, uint64_t Length) {}
+
+  /**
+   * @brief Pages that keep faulting on SMC write-protection (code and frequently written data sharing a page).
+   *
+   * The frontend stops write-protecting such a page and the JIT instead verifies the code of every instruction
+   * translated from it (a CRC check before the instruction runs), exactly like SMCChecks=full but only for these pages.
+   */
+  virtual bool IsSMCHotPage(uint64_t Address) {
+    return false;
+  }
   virtual void InvalidateGuestCodeRange(FEXCore::Core::InternalThreadState* Thread, uint64_t Start, uint64_t Length) {}
   virtual void MarkOvercommitRange(uint64_t Start, uint64_t Length) {}
   virtual void UnmarkOvercommitRange(uint64_t Start, uint64_t Length) {}
