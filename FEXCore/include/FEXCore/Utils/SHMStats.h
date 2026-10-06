@@ -74,7 +74,12 @@ struct ThreadStats {
   uint64_t AccumulatedDiskCacheHitCount;
   uint64_t AccumulatedDiskCacheMissCount;
   uint64_t AccumulatedDiskCacheLookupTime;
-  uint64_t Padding;
+
+  // Guest code-range invalidations (mmap/munmap/mprotect/ptrace pokes ...): calls, cycles spent in them (including the
+  // wait for the invalidation lock), and call-return shadow stacks that had to be dropped because of them.
+  uint64_t AccumulatedInvalidationCount;
+  uint64_t AccumulatedInvalidationTime;
+  uint64_t AccumulatedCallRetFlushCount;
 };
 
 // Ensure 16-byte alignment to take advantage of ARM single-copy atomicity.
