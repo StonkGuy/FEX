@@ -15,6 +15,7 @@ $end_info$
 
 #include <FEXCore/Config/Config.h>
 #include <FEXCore/Core/Context.h>
+#include <FEXCore/Debug/InternalThreadState.h>
 #include <FEXCore/fextl/vector.h>
 #include <FEXCore/Utils/InterruptableConditionVariable.h>
 #include <FEXCore/Utils/Profiler.h>
@@ -216,6 +217,7 @@ public:
   }
 
   void InvalidateGuestCodeRange(FEXCore::Core::InternalThreadState* CallingThread, uint64_t Start, uint64_t Length) {
+    InvalidationStats Stats(CallingThread);
     std::lock_guard lk(ThreadCreationMutex);
 
     // Potential deferred since Thread might not be valid.
@@ -230,6 +232,7 @@ public:
 
   void InvalidateGuestCodeRange(FEXCore::Core::InternalThreadState* CallingThread, uint64_t Start, uint64_t Length,
                                 FEXCore::Context::CodeRangeInvalidationFn after_callback) {
+    InvalidationStats Stats(CallingThread);
     std::lock_guard lk(ThreadCreationMutex);
 
     // Potential deferred since Thread might not be valid.
@@ -250,6 +253,21 @@ public:
   }
 
 private:
+  // Accounts one code-range invalidation (count and cycles) to the calling thread's live stats.
+  struct InvalidationStats {
+    explicit InvalidationStats(FEXCore::Core::InternalThreadState* Thread)
+      : Thread {Thread}
+      , Begin {Thread && Thread->ThreadStats ? FEXCore::SHMStats::GetCycleCounter() : 0} {}
+    ~InvalidationStats() {
+      if (Thread && Thread->ThreadStats) {
+        Thread->ThreadStats->AccumulatedInvalidationCount += 1;
+        Thread->ThreadStats->AccumulatedInvalidationTime += FEXCore::SHMStats::GetCycleCounter() - Begin;
+      }
+    }
+    FEXCore::Core::InternalThreadState* Thread;
+    uint64_t Begin;
+  };
+
   StatAlloc Stat;
   FEXCore::Context::Context* CTX;
   FEX::HLE::SignalDelegator* SignalDelegation;
