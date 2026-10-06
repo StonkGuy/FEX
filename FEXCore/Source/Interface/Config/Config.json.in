@@ -586,6 +586,16 @@
           "\tfull: Validate code before every run (slow)"
         ]
       },
+      "SMCHotPageFaults": {
+        "Type": "uint32",
+        "Default": "32",
+        "AffectsCodeGen": "true",
+        "Desc": [
+          "Number of self-modifying-code write faults a guest page may take before FEX stops write-protecting it.",
+          "Instead the JIT verifies the code of every instruction it translates from such a page (like SMCChecks=full, but only for that page).",
+          "Only used with SMCChecks=mtrack. 0 disables the demotion (pages stay write-protected and keep faulting)."
+        ]
+      },
       "TSOEnabled": {
         "Type": "bool",
         "Default": "true",
