@@ -224,9 +224,16 @@ public:
     // Thread object isn't valid very early in frontend's initialization.
     // To be more optimal the frontend should provide this code with a valid Thread object earlier.
     auto CodeInvalidationlk = FEXCore::GuardSignalDeferringSectionWithFallback(CTX->GetCodeInvalidationMutex(), CallingThread);
-    CTX->InvalidateCodeBuffersCodeRange(Start, Length);
-    for (auto& Thread : Threads) {
-      CTX->InvalidateThreadCachedCodeRange(Thread->Thread, Start, Length);
+    const bool HadCode = CTX->InvalidateCodeBuffersCodeRange(Start, Length);
+    if (HadCode) {
+      for (auto& Thread : Threads) {
+        CTX->InvalidateThreadCachedCodeRange(Thread->Thread, Start, Length, true);
+      }
+    } else {
+      // No code buffer had translated code in the range, so no thread's lookup cache can refer to it. Do not visit
+      // every thread (a process with ~200 threads calls this for every mmap/munmap/mprotect): invalidate the
+      // per-thread executable-range caches lazily instead.
+      CTX->InvalidateExecutableRangeCaches();
     }
   }
 
@@ -239,9 +246,12 @@ public:
     // Thread object isn't valid very early in frontend's initialization.
     // To be more optimal the frontend should provide this code with a valid Thread object earlier.
     auto CodeInvalidationlk = FEXCore::GuardSignalDeferringSectionWithFallback(CTX->GetCodeInvalidationMutex(), CallingThread);
-    CTX->InvalidateCodeBuffersCodeRange(Start, Length);
-    for (auto& Thread : Threads) {
-      CTX->InvalidateThreadCachedCodeRange(Thread->Thread, Start, Length);
+    if (CTX->InvalidateCodeBuffersCodeRange(Start, Length)) {
+      for (auto& Thread : Threads) {
+        CTX->InvalidateThreadCachedCodeRange(Thread->Thread, Start, Length, true);
+      }
+    } else {
+      CTX->InvalidateExecutableRangeCaches();
     }
 
     // Callback while holding the locks.
