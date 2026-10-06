@@ -140,9 +140,15 @@ public:
   virtual void FlushAndCloseCodeMap() = 0;
 
   FEX_DEFAULT_VISIBILITY virtual void ClearCodeCache(FEXCore::Core::InternalThreadState* Thread, bool NewCodeBuffer = true) = 0;
-  FEX_DEFAULT_VISIBILITY virtual void InvalidateCodeBuffersCodeRange(uint64_t Start, uint64_t Length) = 0;
+  /// Makes every thread forget which guest address range it last found executable (the frontend caches one range per
+  /// thread). Cheaper than visiting every thread: it only bumps an epoch that the threads compare when they next decode.
+  FEX_DEFAULT_VISIBILITY virtual void InvalidateExecutableRangeCaches() = 0;
+
+  /// Drops translated code in the range from every code buffer. Returns true if any translated code was found there; when
+  /// it returns false no thread's lookup caches can refer to the range either (see InvalidateThreadCachedCodeRange).
+  FEX_DEFAULT_VISIBILITY virtual bool InvalidateCodeBuffersCodeRange(uint64_t Start, uint64_t Length) = 0;
   FEX_DEFAULT_VISIBILITY virtual void
-  InvalidateThreadCachedCodeRange(FEXCore::Core::InternalThreadState* Thread, uint64_t Start, uint64_t Length) = 0;
+  InvalidateThreadCachedCodeRange(FEXCore::Core::InternalThreadState* Thread, uint64_t Start, uint64_t Length, bool CodeMayBeCached = true) = 0;
   FEX_DEFAULT_VISIBILITY virtual FEXCore::Utils::WritePriorityMutex::Mutex& GetCodeInvalidationMutex() = 0;
 
   FEX_DEFAULT_VISIBILITY virtual void
