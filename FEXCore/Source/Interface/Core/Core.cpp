@@ -1070,6 +1070,7 @@ void ContextImpl::InvalidateThreadCachedCodeRange(FEXCore::Core::InternalThreadS
 
   if (Thread->LookupCache->InvalidateCacheRange(Start, Length)) {
     FEXCORE_PROFILE_SCOPED("InvalidateCallRet");
+    FEXCORE_PROFILE_INSTANT_INCREMENT(Thread, AccumulatedCallRetFlushCount, 1);
 
     // This may cause access violations in the thread on Windows as zeroing is not atomic, this is handled by the frontend
     Allocator::VirtualDontNeed(Thread->CallRetStackBase, FEXCore::Core::InternalThreadState::CALLRET_STACK_SIZE);
