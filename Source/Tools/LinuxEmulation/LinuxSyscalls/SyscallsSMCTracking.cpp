@@ -108,10 +108,15 @@ bool SyscallHandler::HandleSegfault(FEXCore::Core::InternalThreadState* Thread, 
           } else {
             _SyscallHandler->TM.InvalidateGuestCodeRange(Thread, FaultBaseMirrored, FEXCore::Utils::FEX_PAGE_SIZE);
           }
+
+          // Code usually executes from a different mirror than the one that is written through, so every mirror
+          // is accounted: the one that is translated has to become hot.
+          _SyscallHandler->SMCHotPages.RecordFault(FaultBaseMirrored, _SyscallHandler->SMCHotPageFaults());
         }
       } while ((VMA = VMA->ResourceNextVMA));
     } else {
       _SyscallHandler->TM.InvalidateGuestCodeRange(Thread, FaultBase, FEXCore::Utils::FEX_PAGE_SIZE, UnprotectRegionCallback);
+      _SyscallHandler->SMCHotPages.RecordFault(FaultBase, _SyscallHandler->SMCHotPageFaults());
     }
 
     FEXCORE_PROFILE_INSTANT_INCREMENT(Thread, AccumulatedSMCCount, 1);
@@ -134,6 +139,10 @@ bool SyscallHandler::HandleSegfault(FEXCore::Core::InternalThreadState* Thread, 
   }
 }
 
+bool SyscallHandler::IsSMCHotPage(uint64_t Address) {
+  return SMCHotPages.IsHot(Address);
+}
+
 void SyscallHandler::MarkGuestExecutableRange(FEXCore::Core::InternalThreadState* Thread, uint64_t Start, uint64_t Length) {
   const auto Base = Start & FEXCore::Utils::FEX_PAGE_MASK;
   const auto Top = FEXCore::AlignUp(Start + Length, FEXCore::Utils::FEX_PAGE_SIZE);
@@ -141,6 +150,19 @@ void SyscallHandler::MarkGuestExecutableRange(FEXCore::Core::InternalThreadState
   {
     if (SMCChecks != FEXCore::Config::CONFIG_SMC_MTRACK) {
       return;
+    }
+
+    // Hot pages are not write-protected (the JIT verifies their code instead): protect the rest of the range.
+    for (auto Page = Base; Page < Top; Page += FEXCore::Utils::FEX_PAGE_SIZE) {
+      if (SMCHotPages.IsHot(Page)) {
+        if (Page > Base) {
+          MarkGuestExecutableRange(Thread, Base, Page - Base);
+        }
+        if (Page + FEXCore::Utils::FEX_PAGE_SIZE < Top) {
+          MarkGuestExecutableRange(Thread, Page + FEXCore::Utils::FEX_PAGE_SIZE, Top - (Page + FEXCore::Utils::FEX_PAGE_SIZE));
+        }
+        return;
+      }
     }
 
     auto lk = FEXCore::GuardSignalDeferringSection<std::shared_lock>(VMATracking.Mutex, Thread);
