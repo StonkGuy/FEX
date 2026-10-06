@@ -6,6 +6,7 @@ $end_info$
 */
 
 #include "LinuxSyscalls/Syscalls.h"
+#include "LinuxSyscalls/PtraceEmu.h"
 #include "LinuxSyscalls/x64/Syscalls.h"
 #include "LinuxSyscalls/x32/Syscalls.h"
 
@@ -97,13 +98,15 @@ void RegisterInfo(FEX::HLE::SyscallHandler* Handler) {
     ptrace, [](FEXCore::Core::CpuStateFrame* Frame, int /*enum __ptrace_request*/ request, pid_t pid, void* addr, void* data) -> uint64_t {
       uint64_t Result {};
 
+      // Requests whose x86-64 view FEX has to emulate for a tracee that also runs under FEX (PtraceEmu.h).
+      if (PtraceEmu::HandleRequest(request, pid, addr, data, &Result)) {
+        return Result;
+      }
+
       switch (request) {
       case PTRACE_PEEKTEXT:
       case PTRACE_PEEKDATA:
-      case PTRACE_POKETEXT:
-      case PTRACE_POKEDATA:
       case PTRACE_ATTACH:
-      case PTRACE_DETACH:
         // Passthrough these requests. Allows Wine to run the Ubisoft launcher.
         Result = ::syscall(SYSCALL_DEF(ptrace), request, pid, addr, data);
         SYSCALL_ERRNO();

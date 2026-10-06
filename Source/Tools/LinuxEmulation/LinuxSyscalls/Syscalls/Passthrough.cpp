@@ -9,6 +9,7 @@ $end_info$
 #include "LinuxSyscalls/Syscalls.h"
 #include "LinuxSyscalls/x64/Syscalls.h"
 #include "LinuxSyscalls/x32/Syscalls.h"
+#include "LinuxSyscalls/PtraceEmu.h"
 
 #include <stdint.h>
 #include <sys/epoll.h>
@@ -431,7 +432,15 @@ namespace x64 {
     REGISTER_SYSCALL_IMPL_X64(recvmsg, SyscallPassthrough3<SYSCALL_DEF(recvmsg)>);
     REGISTER_SYSCALL_IMPL_X64(setsockopt, SyscallPassthrough5<SYSCALL_DEF(setsockopt)>);
     REGISTER_SYSCALL_IMPL_X64(getsockopt, SyscallPassthrough5<SYSCALL_DEF(getsockopt)>);
-    REGISTER_SYSCALL_IMPL_X64(wait4, SyscallPassthrough4<SYSCALL_DEF(wait4)>);
+    REGISTER_SYSCALL_IMPL_X64(wait4, [](FEXCore::Core::CpuStateFrame* Frame, pid_t pid, int* status, int options, struct rusage* ru) -> uint64_t {
+      uint64_t Result;
+      do {
+        Result = ::syscall(SYSCALL_DEF(wait4), pid, status, options, ru);
+        Result = Result == -1 ? -errno : Result;
+        // Translate host stops of FEX tracees into the x86-64 view; retry when FEX swallowed an internal stop.
+      } while (static_cast<int64_t>(Result) > 0 && PtraceEmu::FixupWaitStatus(static_cast<pid_t>(Result), status));
+      SYSCALL_ERRNO();
+    });
     REGISTER_SYSCALL_IMPL_X64(semop, SyscallPassthrough3<SYSCALL_DEF(semop)>);
     REGISTER_SYSCALL_IMPL_X64(getrlimit, SyscallPassthrough2<SYSCALL_DEF(getrlimit)>);
     REGISTER_SYSCALL_IMPL_X64(getrusage, SyscallPassthrough2<SYSCALL_DEF(getrusage)>);
