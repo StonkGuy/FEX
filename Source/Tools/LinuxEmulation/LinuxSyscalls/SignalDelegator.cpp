@@ -8,6 +8,7 @@ $end_info$
 
 #include "LinuxSyscalls/SignalDelegator.h"
 #include "LinuxSyscalls/Syscalls.h"
+#include "LinuxSyscalls/PtraceEmu.h"
 
 #include <FEXCore/Core/Context.h>
 #include <FEXCore/Core/CoreState.h>
@@ -610,6 +611,17 @@ bool SignalDelegator::HandleFrontendSIGSEGV(FEXCore::Core::InternalThreadState* 
 
 void SignalDelegator::HandleGuestSignal(FEX::HLE::ThreadStateObject* ThreadObject, int Signal, void* Info, void* UContext) {
   auto Thread = ThreadObject->Thread;
+
+  if (PtraceEmu::TryGuestSignalStop(Thread->CurrentFrame, Signal)) {
+    // A ptrace tracer was shown this guest int3/fault as a signal-delivery stop and suppressed it: resume the guest
+    // at the (possibly rewritten) register state instead of delivering the signal.
+    Thread->CurrentFrame->SynchronousFaultData.FaultToTopAndGeneratedException = false;
+    ArchHelpers::Context::SetPc(UContext, Config.AbsoluteLoopTopAddressFillSRA);
+    ArchHelpers::Context::SetFillSRASingleInst(UContext, false);
+    ArchHelpers::Context::SetState(UContext, reinterpret_cast<uint64_t>(Thread->CurrentFrame));
+    return;
+  }
+
   ucontext_t* _context = (ucontext_t*)UContext;
   auto SigInfo = *static_cast<siginfo_t*>(Info);
 
