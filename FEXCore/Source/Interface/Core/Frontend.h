@@ -89,6 +89,8 @@ public:
     ExecutableRangeBase = ExecutableRangeEnd = 0;
   }
 
+  uint64_t ExecutableRangeEpochSeen {};
+
 private:
   // To pass any information from instruction prefixes
   // down into the actual instruction handling machinery.
