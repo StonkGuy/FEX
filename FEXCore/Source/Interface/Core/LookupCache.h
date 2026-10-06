@@ -125,7 +125,8 @@ struct GuestToHostMap {
     return BlockList.erase(Address) != 0;
   }
 
-  void InvalidateRange(uint64_t Start, uint64_t Length) {
+  /// Returns true if there was translated code in the range.
+  bool InvalidateRange(uint64_t Start, uint64_t Length) {
     auto lk = AcquireWriteLock();
 
     auto lower = CodePages.lower_bound(Start >> 12);
@@ -136,7 +137,9 @@ struct GuestToHostMap {
         Erase(Entry, lk);
       }
     }
+    const bool Found = lower != upper;
     CodePages.erase(lower, upper);
+    return Found;
   }
 
   void AddBlockLink(uint64_t GuestDestination, FEXCore::Context::ExitFunctionLinkData* HostLink,

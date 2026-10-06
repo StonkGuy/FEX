@@ -223,8 +223,12 @@ public:
 
   void OnCodeBufferAllocated(const std::shared_ptr<CPU::CodeBuffer>&) override;
   void ClearCodeCache(FEXCore::Core::InternalThreadState* Thread, bool NewCodeBuffer = true) override;
-  void InvalidateCodeBuffersCodeRange(uint64_t Start, uint64_t Length) override;
-  void InvalidateThreadCachedCodeRange(FEXCore::Core::InternalThreadState* Thread, uint64_t Start, uint64_t Length) override;
+  void InvalidateExecutableRangeCaches() override {
+    ExecutableRangeEpoch.fetch_add(1, std::memory_order_acq_rel);
+  }
+  bool InvalidateCodeBuffersCodeRange(uint64_t Start, uint64_t Length) override;
+  std::atomic<uint64_t> ExecutableRangeEpoch {};
+  void InvalidateThreadCachedCodeRange(FEXCore::Core::InternalThreadState* Thread, uint64_t Start, uint64_t Length, bool CodeMayBeCached) override;
   FEXCore::Utils::WritePriorityMutex::Mutex& GetCodeInvalidationMutex() override {
     return CodeInvalidationMutex;
   }

@@ -108,6 +108,12 @@ int32_t Decoder::CheckRangeExecutable(uint64_t Address, uint64_t Size) {
     }
   }
 
+  // Invalidations that did not visit this thread (see InvalidateExecutableRangeCaches) bump an epoch instead.
+  if (const auto Epoch = CTX->ExecutableRangeEpoch.load(std::memory_order_acquire); Epoch != ExecutableRangeEpochSeen) {
+    ExecutableRangeEpochSeen = Epoch;
+    ResetExecutableRangeCache();
+  }
+
   uint64_t RemainingSize = Size;
   while (Address < ExecutableRangeBase || Address + RemainingSize > ExecutableRangeEnd) {
     auto RangeInfo = CTX->SyscallHandler->QueryGuestExecutableRange(Thread, Address);
