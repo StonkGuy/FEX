@@ -15,6 +15,8 @@ $end_info$
 
 #include "LinuxSyscalls/LinuxAllocator.h"
 #include "LinuxSyscalls/SignalDelegator.h"
+#include "LinuxSyscalls/PtraceEmu.h"
+#include <limits.h>
 #include "LinuxSyscalls/Syscalls.h"
 #include "LinuxSyscalls/Syscalls/Thread.h"
 #include "LinuxSyscalls/Utils/Threads.h"
@@ -233,6 +235,12 @@ uint64_t ExecveHandler(FEXCore::Core::CpuStateFrame* Frame, const char* pathname
     bool exists = FHU::Filesystem::Exists(Filename);
     if (!exists) {
       return -ENOENT;
+    }
+
+    if (PtraceEmu::IsAttached()) {
+      // A ptrace tracer reads /proc/<pid>/exe after PTRACE_EVENT_EXEC and expects the guest binary, not FEX.
+      char Resolved[PATH_MAX];
+      PtraceEmu::RecordExecPath(pathname[0] == '/' ? std::string(pathname) : std::string(realpath(Filename.c_str(), Resolved) ? Resolved : pathname));
     }
 
     int pid = getpid();
@@ -814,6 +822,12 @@ SyscallHandler::SyscallHandler(FEXCore::Context::Context* _CTX, FEX::HLE::Signal
 
   SignalDelegation->RegisterHostSignalHandler(SIGSEGV, HandleSegfault, true);
 
+  // A guest `int3` is a host SIGTRAP. Install FEX's handler even when the guest registered none, so a ptrace
+  // tracer's breakpoint can be turned into an emulated signal-delivery stop (see PtraceEmu.h) instead of the
+  // host kernel's default action.
+  SignalDelegation->RegisterHostSignalHandler(
+    SIGTRAP, [](FEXCore::Core::InternalThreadState*, int, void*, void*) { return false; }, true);
+
   ExtendedMetaData = FEX::VolatileMetadata::ParseExtendedVolatileMetadata(FEXCore::Config::Get_EXTENDEDVOLATILEMETADATA()());
 }
 
@@ -856,9 +870,25 @@ void SyscallHandler::HandleSyscallImpl(FEXCore::Core::CpuStateFrame* Frame, uint
     }
   }
 
-  const auto SyscallNum = GetArg(Is64Bit, Frame, 0);
+  auto SyscallNum = GetArg(Is64Bit, Frame, 0);
+
+  // Emulated ptrace syscall stops: a tracer that resumed us with PTRACE_SYSCALL sees entry/exit stops with the
+  // x86-64 view of the syscall (see PtraceEmu.h).
+  uint64_t TraceArgs[6] {};
+  const bool ReportStops = Is64Bit && PtraceEmu::WantsSyscallStops();
+  if (ReportStops) {
+    for (unsigned i = 0; i < 6; ++i) {
+      TraceArgs[i] = GetArg(Is64Bit, Frame, i + 1);
+    }
+    SyscallNum = PtraceEmu::SyscallEntryStop(Frame, SyscallNum, TraceArgs); // the tracer may have changed the syscall
+  }
+
   if (SyscallNum >= Definitions.size()) {
-    SetResult(Frame, -ENOSYS);
+    uint64_t Result = -ENOSYS;
+    if (ReportStops && PtraceEmu::WantsSyscallStops()) {
+      Result = PtraceEmu::SyscallExitStop(Frame, SyscallNum, TraceArgs, Result);
+    }
+    SetResult(Frame, Result);
     return;
   }
 
@@ -891,6 +921,24 @@ void SyscallHandler::HandleSyscallImpl(FEXCore::Core::CpuStateFrame* Frame, uint
 #ifdef DEBUG_STRACE
   Strace(Frame, Result);
 #endif
+
+  if constexpr (Is64Bit) {
+    PtraceEmu::ApplyPendingFlush(Frame);
+    // clone/fork/vfork/clone3 returned 0: this is the child. A forked child is not traced.
+    if (Result == 0 && (SyscallNum == 56 || SyscallNum == 57 || SyscallNum == 58 || SyscallNum == 435)) {
+      constexpr uint64_t CloneVM = 0x100;
+      uint64_t Flags = 0;
+      if (SyscallNum == 56) {
+        Flags = GetArg(Is64Bit, Frame, 1);
+      } else if (SyscallNum == 435) {
+        Flags = *reinterpret_cast<const uint64_t*>(GetArg(Is64Bit, Frame, 1)); // struct clone_args::flags
+      }
+      PtraceEmu::OnForkedChild((Flags & CloneVM) != 0);
+    }
+    if (ReportStops && PtraceEmu::WantsSyscallStops()) {
+      Result = PtraceEmu::SyscallExitStop(Frame, SyscallNum, TraceArgs, Result);
+    }
+  }
   SetResult(Frame, Result);
 }
 
@@ -906,9 +954,13 @@ void SyscallHandler::HandleSyscall(FEXCore::Core::CpuStateFrame* Frame) {
     HandleSyscallImpl<false>(Frame, JITPC);
   }
 
-  // Skip past the `syscall` or `int 0x80` instruction. Both of which are 2-bytes.
+  // Skip past the `syscall` or `int 0x80` instruction (both are 2 bytes) unless a ptrace tracer rewrote RIP.
   auto Thread = FEX::HLE::ThreadManager::GetStateObjectFromCPUState(Frame);
-  Thread->Thread->CurrentFrame->State.rip += 2;
+  if (const uint64_t NewRip = PtraceEmu::TakePendingRip()) {
+    Thread->Thread->CurrentFrame->State.rip = NewRip;
+  } else {
+    Thread->Thread->CurrentFrame->State.rip += 2;
+  }
 }
 
 #ifdef DEBUG_STRACE

@@ -13,6 +13,7 @@ $end_info$
 #include "FEXCore/Config/Config.h"
 #include "LinuxSyscalls/FileManagement.h"
 #include "LinuxSyscalls/EmulatedFiles/EmulatedFiles.h"
+#include "LinuxSyscalls/PtraceEmu.h"
 #include "LinuxSyscalls/Syscalls.h"
 #include "LinuxSyscalls/x64/Syscalls.h"
 
@@ -800,6 +801,26 @@ uint64_t FileManager::FAccessat2(int dirfd, const char* pathname, int mode, int 
   return ::syscall(SYSCALL_DEF(faccessat2), dirfd, SelfPath, mode, flags);
 }
 
+// `/proc/<pid>/exe` of a ptrace tracee that is itself a FEX guest process: the host link points at FEX, but a tracer
+// expects the guest binary (see PtraceEmu.h).
+static std::optional<uint64_t> ReadlinkTraceeExe(const char* Path, char* Buf, size_t BufSize) {
+  if (!Path || strncmp(Path, "/proc/", 6) != 0) {
+    return std::nullopt;
+  }
+  char* End = nullptr;
+  const long Pid = strtol(Path + 6, &End, 10);
+  if (End == Path + 6 || strcmp(End, "/exe") != 0) {
+    return std::nullopt;
+  }
+  const auto Exe = PtraceEmu::TraceeExePath(static_cast<pid_t>(Pid));
+  if (!Exe) {
+    return std::nullopt;
+  }
+  const size_t Len = std::min(BufSize, Exe->size());
+  memcpy(Buf, Exe->data(), Len);
+  return Len;
+}
+
 uint64_t FileManager::Readlink(const char* pathname, char* buf, size_t bufsiz) {
   // calculate the non-self link to exe
   // Some executables do getpid, stat("/proc/$pid/exe")
@@ -810,6 +831,10 @@ uint64_t FileManager::Readlink(const char* pathname, char* buf, size_t bufsiz) {
     const auto& App = Filename();
     strncpy(buf, App.c_str(), bufsiz);
     return std::min(bufsiz, App.size());
+  }
+
+  if (auto Traced = ReadlinkTraceeExe(pathname, buf, bufsiz)) {
+    return *Traced;
   }
 
   FDPathTmpData TmpFilename;
@@ -887,6 +912,12 @@ uint64_t FileManager::Readlinkat(int dirfd, const char* pathname, char* buf, siz
     const auto& App = Filename();
     strncpy(buf, App.c_str(), bufsiz);
     return std::min(bufsiz, App.size());
+  }
+
+  if (!Path.empty() && Path[0] == '/') {
+    if (auto Traced = ReadlinkTraceeExe(Path.c_str(), buf, bufsiz)) {
+      return *Traced;
+    }
   }
 
   FDPathTmpData TmpFilename;

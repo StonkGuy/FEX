@@ -10,6 +10,7 @@ add_library(LinuxEmulation STATIC
   LinuxSyscalls/EmulatedFiles/EmulatedFiles.cpp
   LinuxSyscalls/FaultSafeUserMemAccess.cpp
   LinuxSyscalls/FileManagement.cpp
+  LinuxSyscalls/PtraceEmu.cpp
   LinuxSyscalls/LinuxAllocator.cpp
   LinuxSyscalls/Seccomp/SeccompEmulator.cpp
   LinuxSyscalls/Seccomp/BPFEmitter.cpp
