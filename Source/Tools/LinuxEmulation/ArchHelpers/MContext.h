@@ -20,6 +20,7 @@ namespace FEX::ArchHelpers::Context {
 
 enum ContextFlags : uint32_t {
   CONTEXT_FLAG_INJIT = (1U << 0),
+  CONTEXT_FLAG_SYSCALLINFO_CLEARED = (1U << 1), ///< the guest handler was entered from the C++ half of a syscall: ClearedSyscallInfo is its InSyscallInfo
 };
 
 #if defined(ASSERTIONS_ENABLED) && ASSERTIONS_ENABLED
@@ -40,6 +41,7 @@ struct X86ContextBackup {
   FEXCore::x86_64::_libc_fpstate FPRState;
   uint64_t sa_mask;
   uint16_t InSyscallInfo;
+  uint16_t ClearedSyscallInfo;
   bool FaultToTopAndGeneratedException;
   uint64_t GuestSignalMask; ///< guest-visible signal mask at the time the guest handler was entered (restored at rt_sigreturn)
 
@@ -68,6 +70,7 @@ struct ArmContextBackup {
   __uint128_t FPRs[32];
   uint64_t sa_mask;
   uint16_t InSyscallInfo;
+  uint16_t ClearedSyscallInfo;
   bool FaultToTopAndGeneratedException;
   uint64_t GuestSignalMask; ///< guest-visible signal mask at the time the guest handler was entered (restored at rt_sigreturn)
 
