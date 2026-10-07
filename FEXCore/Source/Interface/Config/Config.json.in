@@ -603,6 +603,25 @@
           "ProfileSampleHz samples every guest thread instead of only the main one."
         ]
       },
+      "SignalTrace": {
+        "Type": "bool",
+        "Default": "false",
+        "AffectsCodeGen": "false",
+        "Desc": [
+          "Records guest signal handling events (host signal arrival, masking decisions, delivery, rt_sigreturn, sigprocmask, kill/tgkill)",
+          "into a ring buffer in /dev/shm/fex-<pid>-sigtrace. For diagnosing lost signals; decode with tools/harness/sigtrace.py."
+        ]
+      },
+      "SignalMaskFix": {
+        "Type": "bool",
+        "Default": "true",
+        "AffectsCodeGen": "false",
+        "Desc": [
+          "Run guest signal handlers with the signal mask Linux gives them (the interrupted mask plus sa_mask and the signal)",
+          "and restore the interrupted mask at rt_sigreturn. With false FEX blocks only sa_mask and the signal during the handler and keeps",
+          "a stale view of the mask afterwards, so a signal handler that restores its saved mask can unblock the signal it is running for."
+        ]
+      },
       "SMCHotPageFaults": {
         "Type": "uint32",
         "Default": "32",
