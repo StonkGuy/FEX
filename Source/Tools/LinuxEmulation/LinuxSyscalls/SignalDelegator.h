@@ -184,6 +184,8 @@ private:
   FEXCore::Context::Context* CTX;
 
   FEX_CONFIG_OPT(Is64BitMode, IS64BIT_MODE);
+  FEX_CONFIG_OPT(SignalMaskFix, SIGNALMASKFIX);
+  FEX_CONFIG_OPT(SignalTrace, SIGNALTRACE);
   const fextl::string ApplicationName;
   FEX_CONFIG_OPT(HalfBarrierTSOEnabled, HALFBARRIERTSOENABLED);
 
