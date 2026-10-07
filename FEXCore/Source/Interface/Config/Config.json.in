@@ -574,6 +574,23 @@
           "\tfull: Validate code before every run (slow)"
         ]
       },
+      "ProfileSampleHz": {
+        "Type": "uint32",
+        "Default": "0",
+        "AffectsCodeGen": "false",
+        "Desc": [
+          "Samples the host PC of the main guest thread this many times per second into /dev/shm/fex-<pid>-samples (in-process; no ptrace).",
+          "Use with LibraryJITNaming to attribute samples to guest libraries. 0 disables."
+        ]
+      },
+      "ProfileSampleAllThreads": {
+        "Type": "bool",
+        "Default": "false",
+        "AffectsCodeGen": "false",
+        "Desc": [
+          "ProfileSampleHz samples every guest thread instead of only the main one."
+        ]
+      },
       "SMCHotPageFaults": {
         "Type": "uint32",
         "Default": "32",

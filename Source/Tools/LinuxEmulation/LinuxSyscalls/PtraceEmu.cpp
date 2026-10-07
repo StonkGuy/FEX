@@ -541,6 +541,12 @@ bool FixupWaitStatus(pid_t Pid, int* Status) {
     return true;
   }
 
+  if ((St >> 16) == 0 && WSTOPSIG(St) == SIGPROF && IsFexTracee(Pid)) {
+    // FEX's own sampling profiler signal: never visible to the guest tracer.
+    HostPtrace(PTRACE_CONT, Pid, nullptr, nullptr);
+    return true;
+  }
+
   if ((St >> 16) == X86_PTRACE_EVENT_EXEC) {
     // The tracee is now a fresh FEX image: keep the new image's path, drop the old image's state page.
     CaptureExecPath(Pid);
