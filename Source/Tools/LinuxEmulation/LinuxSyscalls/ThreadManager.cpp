@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 #include "LinuxSyscalls/ThreadManager.h"
+#include "LinuxSyscalls/SamplingProfiler.h"
 
 #include "LinuxSyscalls/Syscalls.h"
 #include "LinuxSyscalls/SignalDelegator.h"
@@ -196,6 +197,17 @@ ThreadManager::CreateThread(const FEXCore::Core::CPUState* NewThreadState, uint6
   Frame->State.callret_sp = ThreadStateObject->GetCallRetStackInfo().DefaultLocation;
 
   ThreadStateObject->Thread->FrontendPtr = ThreadStateObject;
+
+  {
+    // The sampling profiler (FEX_PROFILESAMPLEHZ) only starts in the process that grows past ~100 guest threads, i.e.
+    // the application itself: a Steam/Wine session runs hundreds of FEX processes and perturbing all of them is useless.
+    static std::atomic<uint32_t> ThreadCount {0};
+    FEX_CONFIG_OPT(ProfileSampleHz, PROFILESAMPLEHZ);
+    FEX_CONFIG_OPT(ProfileSampleAllThreads, PROFILESAMPLEALLTHREADS);
+    if (ProfileSampleHz() && ThreadCount.fetch_add(1) + 1 == 100) {
+      StartSamplingProfiler(SignalDelegation, ProfileSampleHz(), ProfileSampleAllThreads());
+    }
+  }
   if (ProfileStats()) {
     ThreadStateObject->Thread->ThreadStats = Stat.AllocateSlot(ThreadStateObject->ThreadInfo.TID);
   }
