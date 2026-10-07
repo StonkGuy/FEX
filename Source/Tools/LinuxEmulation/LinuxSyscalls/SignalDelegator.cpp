@@ -173,6 +173,7 @@ ArchHelpers::Context::ContextBackup* SignalDelegator::StoreThreadState(FEXCore::
   Context->UContextLocation = 0;
   Context->SigInfoLocation = 0;
   Context->InSyscallInfo = 0;
+  Context->ClearedSyscallInfo = 0;
   Context->GuestSignalMask = 0;
 
   // Store fault to top status and then reset it
@@ -261,6 +262,10 @@ void SignalDelegator::RestoreThreadState(FEXCore::Core::InternalThreadState* Thr
 
   // Restore host state
   ArchHelpers::Context::RestoreContext(ucontext, Context);
+  if (Context->Flags & ArchHelpers::Context::ContextFlags::CONTEXT_FLAG_SYSCALLINFO_CLEARED) {
+    // Back in the syscall handler the guest signal interrupted.
+    Thread->CurrentFrame->InSyscallInfo = Context->ClearedSyscallInfo;
+  }
 
   {
     auto ThreadObject = FEX::HLE::ThreadManager::GetStateObjectFromFEXCoreThread(Thread);
@@ -340,6 +345,17 @@ bool SignalDelegator::HandleDispatcherGuestSignal(FEXCore::Core::InternalThreadS
     ContextBackup->InSyscallInfo = Thread->CurrentFrame->InSyscallInfo;
     Thread->CurrentFrame->InSyscallInfo = 0;
   } else {
+    // Interrupted outside of JIT code, typically in the C++ half of a syscall handler, where InSyscallInfo still says that all
+    // registers are spilled. The guest handler is going to run JIT code with live registers, so it must not inherit that: an SMC
+    // fault or a nested signal before the handler's own first syscall would skip spilling every register (the spill mask is
+    // InSyscallInfo & 0xFFFF) and the redispatch would reload stale values from the frame. rt_sigreturn puts it back, because the
+    // interrupted syscall handler continues and a signal can still arrive while the syscall op refills the registers.
+    if (Thread->CurrentFrame->InSyscallInfo != 0) {
+      ContextBackup->ClearedSyscallInfo = Thread->CurrentFrame->InSyscallInfo;
+      ContextBackup->Flags |= ArchHelpers::Context::ContextFlags::CONTEXT_FLAG_SYSCALLINFO_CLEARED;
+      Thread->CurrentFrame->InSyscallInfo = 0;
+    }
+
     if (!IsAddressInDispatcher(OldPC)) {
       // This is likely to cause issues but in some cases it isn't fatal
       // This can also happen if we have put a signal on hold, then we just reenabled the signal
