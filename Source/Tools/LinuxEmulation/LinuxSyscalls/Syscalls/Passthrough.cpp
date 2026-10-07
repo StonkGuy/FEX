@@ -10,6 +10,11 @@ $end_info$
 #include "LinuxSyscalls/x64/Syscalls.h"
 #include "LinuxSyscalls/x32/Syscalls.h"
 #include "LinuxSyscalls/PtraceEmu.h"
+#include "LinuxSyscalls/SignalTrace.h"
+
+#include <errno.h>
+#include <sys/syscall.h>
+#include <unistd.h>
 
 #include <stdint.h>
 #include <sys/epoll.h>
@@ -211,8 +216,24 @@ uint64_t SyscallPassthrough7(FEXCore::Core::CpuStateFrame* Frame, uint64_t arg1,
 #endif
 
 static void RegisterCommon(FEX::HLE::SyscallHandler* Handler) {
-  REGISTER_SYSCALL_IMPL(read, SyscallPassthrough3<SYSCALL_DEF(read)>);
-  REGISTER_SYSCALL_IMPL(write, SyscallPassthrough3<SYSCALL_DEF(write)>);
+  // Wine's thread wake-up protocol moves 16-byte records through a pipe per thread; with FEX_SIGNALTRACE those reads and writes
+  // (and their first 8 bytes, the wait cookie) go into the trace ring.
+  REGISTER_SYSCALL_IMPL(read, [](FEXCore::Core::CpuStateFrame* Frame, int fd, void* buf, size_t count) -> uint64_t {
+    uint64_t Result = ::syscall(SYSCALL_DEF(read), fd, buf, count);
+    if (count == 16 && SigTrace::Enabled()) {
+      const int Errno = errno;
+      SigTrace::Log(::syscall(SYS_gettid), SigTrace::Read16, fd, Result, Result == 16 ? *static_cast<const uint64_t*>(buf) : (1ULL << 63) | Errno);
+    }
+    SYSCALL_ERRNO();
+  });
+  REGISTER_SYSCALL_IMPL(write, [](FEXCore::Core::CpuStateFrame* Frame, int fd, const void* buf, size_t count) -> uint64_t {
+    uint64_t Result = ::syscall(SYSCALL_DEF(write), fd, buf, count);
+    if (count == 16 && SigTrace::Enabled()) {
+      const int Errno = errno;
+      SigTrace::Log(::syscall(SYS_gettid), SigTrace::Write16, fd, Result, Result == 16 ? *static_cast<const uint64_t*>(buf) : (1ULL << 63) | Errno);
+    }
+    SYSCALL_ERRNO();
+  });
   REGISTER_SYSCALL_IMPL(lseek, SyscallPassthrough3<SYSCALL_DEF(lseek)>);
   REGISTER_SYSCALL_IMPL(sched_yield, SyscallPassthrough0<SYSCALL_DEF(sched_yield)>);
   REGISTER_SYSCALL_IMPL(msync, SyscallPassthrough3<SYSCALL_DEF(msync)>);
@@ -230,7 +251,13 @@ static void RegisterCommon(FEX::HLE::SyscallHandler* Handler) {
   REGISTER_SYSCALL_IMPL(getsockname, SyscallPassthrough3<SYSCALL_DEF(getsockname)>);
   REGISTER_SYSCALL_IMPL(getpeername, SyscallPassthrough3<SYSCALL_DEF(getpeername)>);
   REGISTER_SYSCALL_IMPL(socketpair, SyscallPassthrough4<SYSCALL_DEF(socketpair)>);
-  REGISTER_SYSCALL_IMPL(kill, SyscallPassthrough2<SYSCALL_DEF(kill)>);
+  REGISTER_SYSCALL_IMPL(kill, [](FEXCore::Core::CpuStateFrame* Frame, pid_t pid, int sig) -> uint64_t {
+    if (SigTrace::Enabled()) {
+      SigTrace::Log(::syscall(SYS_gettid), SigTrace::Kill, sig, pid, 0);
+    }
+    uint64_t Result = ::syscall(SYSCALL_DEF(kill), pid, sig);
+    SYSCALL_ERRNO();
+  });
   REGISTER_SYSCALL_IMPL(semget, SyscallPassthrough3<SYSCALL_DEF(semget)>);
   REGISTER_SYSCALL_IMPL(msgget, SyscallPassthrough2<SYSCALL_DEF(msgget)>);
   REGISTER_SYSCALL_IMPL(msgsnd, SyscallPassthrough4<SYSCALL_DEF(msgsnd)>);
@@ -293,7 +320,13 @@ static void RegisterCommon(FEX::HLE::SyscallHandler* Handler) {
   REGISTER_SYSCALL_IMPL(fgetxattr, SyscallPassthrough4<SYSCALL_DEF(fgetxattr)>);
   REGISTER_SYSCALL_IMPL(flistxattr, SyscallPassthrough3<SYSCALL_DEF(flistxattr)>);
   REGISTER_SYSCALL_IMPL(fremovexattr, SyscallPassthrough2<SYSCALL_DEF(fremovexattr)>);
-  REGISTER_SYSCALL_IMPL(tkill, SyscallPassthrough2<SYSCALL_DEF(tkill)>);
+  REGISTER_SYSCALL_IMPL(tkill, [](FEXCore::Core::CpuStateFrame* Frame, pid_t tid, int sig) -> uint64_t {
+    if (SigTrace::Enabled()) {
+      SigTrace::Log(::syscall(SYS_gettid), SigTrace::Kill, sig, tid, 0);
+    }
+    uint64_t Result = ::syscall(SYSCALL_DEF(tkill), tid, sig);
+    SYSCALL_ERRNO();
+  });
   REGISTER_SYSCALL_IMPL(sched_setaffinity, SyscallPassthrough3<SYSCALL_DEF(sched_setaffinity)>);
   REGISTER_SYSCALL_IMPL(sched_getaffinity, SyscallPassthrough3<SYSCALL_DEF(sched_getaffinity)>);
   REGISTER_SYSCALL_IMPL(io_setup, SyscallPassthrough2<SYSCALL_DEF(io_setup)>);
@@ -303,7 +336,13 @@ static void RegisterCommon(FEX::HLE::SyscallHandler* Handler) {
   REGISTER_SYSCALL_IMPL(remap_file_pages, SyscallPassthrough5<SYSCALL_DEF(remap_file_pages)>);
   REGISTER_SYSCALL_IMPL(timer_getoverrun, SyscallPassthrough1<SYSCALL_DEF(timer_getoverrun)>);
   REGISTER_SYSCALL_IMPL(timer_delete, SyscallPassthrough1<SYSCALL_DEF(timer_delete)>);
-  REGISTER_SYSCALL_IMPL(tgkill, SyscallPassthrough3<SYSCALL_DEF(tgkill)>);
+  REGISTER_SYSCALL_IMPL(tgkill, [](FEXCore::Core::CpuStateFrame* Frame, pid_t tgid, pid_t tid, int sig) -> uint64_t {
+    if (SigTrace::Enabled()) {
+      SigTrace::Log(::syscall(SYS_gettid), SigTrace::Kill, sig, tid, tgid);
+    }
+    uint64_t Result = ::syscall(SYSCALL_DEF(tgkill), tgid, tid, sig);
+    SYSCALL_ERRNO();
+  });
   REGISTER_SYSCALL_IMPL(mbind, SyscallPassthrough6<SYSCALL_DEF(mbind)>);
   REGISTER_SYSCALL_IMPL(set_mempolicy, SyscallPassthrough3<SYSCALL_DEF(set_mempolicy)>);
   REGISTER_SYSCALL_IMPL(get_mempolicy, SyscallPassthrough5<SYSCALL_DEF(get_mempolicy)>);
