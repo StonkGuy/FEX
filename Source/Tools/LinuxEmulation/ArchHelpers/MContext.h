@@ -41,6 +41,7 @@ struct X86ContextBackup {
   uint64_t sa_mask;
   uint16_t InSyscallInfo;
   bool FaultToTopAndGeneratedException;
+  uint64_t GuestSignalMask; ///< guest-visible signal mask at the time the guest handler was entered (restored at rt_sigreturn)
 
   // Guest state
   int Signal;
@@ -68,6 +69,7 @@ struct ArmContextBackup {
   uint64_t sa_mask;
   uint16_t InSyscallInfo;
   bool FaultToTopAndGeneratedException;
+  uint64_t GuestSignalMask; ///< guest-visible signal mask at the time the guest handler was entered (restored at rt_sigreturn)
 
   // Guest state
   int Signal;

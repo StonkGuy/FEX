@@ -6,6 +6,7 @@ tags: LinuxSyscalls|syscalls-x86-64
 $end_info$
 */
 
+#include "LinuxSyscalls/SignalTrace.h"
 #include "LinuxSyscalls/Syscalls.h"
 #include "LinuxSyscalls/Types.h"
 #include "LinuxSyscalls/x64/Syscalls.h"
@@ -14,6 +15,7 @@ $end_info$
 #include <FEXCore/fextl/vector.h>
 
 #include <algorithm>
+#include <errno.h>
 #include <cstdint>
 #include <stddef.h>
 #include <sys/epoll.h>
@@ -50,6 +52,9 @@ void RegisterEpoll(FEX::HLE::SyscallHandler* Handler) {
       EventPtr = &Event;
     }
     uint64_t Result = ::syscall(SYSCALL_DEF(epoll_ctl), epfd, op, fd, EventPtr);
+    if (SigTrace::Enabled()) {
+      SigTrace::Log(::syscall(SYS_gettid), SigTrace::EpollCtl, op, fd, (EventPtr ? EventPtr->events : 0) | (Result << 32));
+    }
     if (Result != -1 && event) {
       FaultSafeUserMemAccess::VerifyIsWritable(event, sizeof(FEX::HLE::epoll_event_x86));
       *event = Event;

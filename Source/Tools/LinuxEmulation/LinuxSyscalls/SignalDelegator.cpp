@@ -9,6 +9,7 @@ $end_info$
 #include "LinuxSyscalls/SignalDelegator.h"
 #include "LinuxSyscalls/Syscalls.h"
 #include "LinuxSyscalls/PtraceEmu.h"
+#include "LinuxSyscalls/SignalTrace.h"
 
 #include <FEXCore/Core/Context.h>
 #include <FEXCore/Core/CoreState.h>
@@ -172,6 +173,7 @@ ArchHelpers::Context::ContextBackup* SignalDelegator::StoreThreadState(FEXCore::
   Context->UContextLocation = 0;
   Context->SigInfoLocation = 0;
   Context->InSyscallInfo = 0;
+  Context->GuestSignalMask = 0;
 
   // Store fault to top status and then reset it
   Context->FaultToTopAndGeneratedException = Thread->CurrentFrame->SynchronousFaultData.FaultToTopAndGeneratedException;
@@ -179,6 +181,8 @@ ArchHelpers::Context::ContextBackup* SignalDelegator::StoreThreadState(FEXCore::
 
   return Context;
 }
+
+static void CheckForPendingSignals(const FEX::HLE::ThreadStateObject* Thread);
 
 void SignalDelegator::RestoreThreadState(FEXCore::Core::InternalThreadState* Thread, void* ucontext, RestoreType Type) {
   uint64_t OldSP {};
@@ -258,6 +262,18 @@ void SignalDelegator::RestoreThreadState(FEXCore::Core::InternalThreadState* Thr
   // Restore host state
   ArchHelpers::Context::RestoreContext(ucontext, Context);
 
+  {
+    auto ThreadObject = FEX::HLE::ThreadManager::GetStateObjectFromFEXCoreThread(Thread);
+    SigTrace::Log(ThreadObject->ThreadInfo.TID, SigTrace::SigReturn, 0, Thread->CurrentFrame->State.gregs[FEXCore::X86State::REG_RSP],
+                  Context->GuestSignalMask);
+    if (Type != RestoreType::TYPE_PAUSE && SignalMaskFix()) {
+      // The guest handler is done: the guest-visible mask goes back to what the interrupted code had, and anything that became
+      // unmasked and was only recorded as pending is raised again.
+      ThreadObject->SignalInfo.CurrentSignalMask.Val = Context->GuestSignalMask;
+      CheckForPendingSignals(ThreadObject);
+    }
+  }
+
   // Reset the guest state
   memcpy(&Thread->CurrentFrame->State, &Context->GuestState, sizeof(FEXCore::Core::CPUState));
 
@@ -285,6 +301,8 @@ void SignalDelegator::RestoreThreadState(FEXCore::Core::InternalThreadState* Thr
 bool SignalDelegator::HandleDispatcherGuestSignal(FEXCore::Core::InternalThreadState* Thread, int Signal, void* info, void* ucontext,
                                                   GuestSigAction* GuestAction, stack_t* GuestStack) {
   auto ContextBackup = StoreThreadState(Thread, Signal, ucontext);
+  // Remember the guest-visible mask of the interrupted code: rt_sigreturn puts it back (SignalMaskFix).
+  ContextBackup->GuestSignalMask = FEX::HLE::ThreadManager::GetStateObjectFromFEXCoreThread(Thread)->SignalInfo.CurrentSignalMask.Val;
 
   auto Frame = Thread->CurrentFrame;
 
@@ -626,6 +644,8 @@ void SignalDelegator::HandleGuestSignal(FEX::HLE::ThreadStateObject* ThreadObjec
   auto SigInfo = *static_cast<siginfo_t*>(Info);
 
   auto MustDeferSignal = (Thread->CurrentFrame->State.DeferredSignalRefCount.Load() != 0);
+  SigTrace::Log(ThreadObject->ThreadInfo.TID, SigTrace::HostArrive, Signal, ThreadObject->SignalInfo.CurrentSignalMask.Val,
+                (static_cast<uint64_t>(MustDeferSignal) << 32) | static_cast<uint32_t>(SigInfo.si_code));
   if (Signal == SIGSEGV && SigInfo.si_code == SEGV_ACCERR && SigInfo.si_addr == reinterpret_cast<void*>(&Thread->InterruptFaultPage)) {
     if (!MustDeferSignal) {
       // We just reached the end of the outermost signal-deferring section and faulted to check for pending signals.
@@ -689,6 +709,8 @@ void SignalDelegator::HandleGuestSignal(FEX::HLE::ThreadStateObject* ThreadObjec
     // This allows us to maintain the expected signal mask through the guest signal handling and then all the way back again
     sigmask_val[0] = GetNewSigMask(Signal);
 
+    SigTrace::Log(ThreadObject->ThreadInfo.TID, SigTrace::Deferred, Signal, 0, 0);
+
     // Now update the faulting page permissions so it will fault on write.
     mprotect(reinterpret_cast<void*>(&Thread->InterruptFaultPage), sizeof(Thread->InterruptFaultPage), PROT_NONE);
 
@@ -701,6 +723,7 @@ void SignalDelegator::HandleGuestSignal(FEX::HLE::ThreadStateObject* ThreadObjec
     // This signal is masked, must defer until the guest updates the signal mask.
     // Add it to the pending signal list
     ThreadObject->SignalInfo.PendingSignals |= 1ULL << (Signal - 1);
+    SigTrace::Log(ThreadObject->ThreadInfo.TID, SigTrace::Masked, Signal, ThreadObject->SignalInfo.CurrentSignalMask.Val, ThreadObject->SignalInfo.PendingSignals);
     return;
   }
 
@@ -722,6 +745,23 @@ void SignalDelegator::HandleGuestSignal(FEX::HLE::ThreadStateObject* ThreadObjec
     if (Handler.GuestHandler &&
         Handler.GuestHandler(Thread, Signal, &SigInfo, UContext, &Handler.GuestAction, &ThreadObject->SignalInfo.GuestAltStack)) {
       uint64_t NewMask = GetNewSigMask(Signal);
+      if (SignalMaskFix()) {
+        // Linux blocks (interrupted mask | sa_mask | the signal itself unless SA_NODEFER) while the handler runs, and the guest sees
+        // exactly that when it reads or restores the mask; rt_sigreturn puts the interrupted mask back (RestoreThreadState).
+        uint64_t GuestNew = ThreadObject->SignalInfo.CurrentSignalMask.Val | Handler.GuestAction.sa_mask.Val;
+        if (!(Handler.GuestAction.sa_flags & SA_NODEFER)) {
+          GuestNew |= 1ULL << (Signal - 1);
+        }
+        GuestNew &= ~((1ULL << (SIGKILL - 1)) | (1ULL << (SIGSTOP - 1)));
+        ThreadObject->SignalInfo.CurrentSignalMask.Val = GuestNew;
+        NewMask = GuestNew;
+        for (size_t i = 0; i < MAX_SIGNALS; ++i) {
+          if (HostHandlers[i + 1].Required.load(std::memory_order_relaxed)) {
+            NewMask &= ~(1ULL << i); // never mask our required signals at the host level
+          }
+        }
+      }
+      SigTrace::Log(ThreadObject->ThreadInfo.TID, SigTrace::Delivered, Signal, reinterpret_cast<uint64_t>(Handler.GuestAction.sigaction_handler.sigaction), NewMask);
 
       // Update our host signal mask so we don't hit race conditions with signals
       // This allows us to maintain the expected signal mask through the guest signal handling and then all the way back again
@@ -908,6 +948,10 @@ SignalDelegator::SignalDelegator(FEXCore::Context::Context* _CTX, const std::str
   , ApplicationName {ApplicationName}
   , SupportsAVX {SupportsAVX}
   , SupportsSVE256 {SupportsSVE256} {
+  if (SignalTrace()) {
+    SigTrace::Init();
+  }
+
   // Signal zero isn't real
   HostHandlers[0].Installed = true;
 
@@ -1229,6 +1273,7 @@ static void CheckForPendingSignals(const FEX::HLE::ThreadStateObject* Thread) {
   if (PendingSignals != 0) {
     for (int i = 0; i < 64; ++i) {
       if (PendingSignals & (1ULL << i)) {
+        SigTrace::Log(Thread->ThreadInfo.TID, SigTrace::Reraise, i + 1, Thread->SignalInfo.CurrentSignalMask.Val, Thread->SignalInfo.PendingSignals);
         FHU::Syscalls::tgkill(Thread->ThreadInfo.PID, Thread->ThreadInfo.TID, i + 1);
         // We might not even return here which is spooky
       }
@@ -1269,6 +1314,11 @@ uint64_t SignalDelegator::GuestSigProcMask(FEX::HLE::ThreadStateObject* Thread, 
     }
 
     ::syscall(SYS_rt_sigprocmask, SIG_SETMASK, &HostMask, nullptr, 8);
+    // Wine brackets every server call with a block/restore pair (tens of thousands per second): only the ones made inside a guest
+    // signal handler are interesting.
+    if (Thread->Thread->CurrentFrame->SignalHandlerRefCounter != 0) {
+      SigTrace::Log(Thread->ThreadInfo.TID, SigTrace::ProcMask, how, *set, Thread->SignalInfo.CurrentSignalMask.Val);
+    }
   }
 
   if (oldset) {

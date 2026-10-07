@@ -12,6 +12,7 @@ add_library(LinuxEmulation STATIC
   LinuxSyscalls/FileManagement.cpp
   LinuxSyscalls/PtraceEmu.cpp
   LinuxSyscalls/SamplingProfiler.cpp
+  LinuxSyscalls/SignalTrace.cpp
   LinuxSyscalls/LinuxAllocator.cpp
   LinuxSyscalls/Seccomp/SeccompEmulator.cpp
   LinuxSyscalls/Seccomp/BPFEmitter.cpp
