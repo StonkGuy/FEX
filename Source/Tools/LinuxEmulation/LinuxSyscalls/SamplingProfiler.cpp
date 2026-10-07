@@ -5,6 +5,7 @@
 #include "ArchHelpers/MContext.h"
 
 #include <FEXCore/Core/CoreState.h>
+#include <FEXCore/Core/X86Enums.h>
 #include <FEXCore/Debug/InternalThreadState.h>
 
 #include <atomic>
@@ -18,6 +19,7 @@
 #include <unordered_map>
 #include <sys/mman.h>
 #include <sys/syscall.h>
+#include <sys/uio.h>
 #include <unistd.h>
 
 namespace FEX::HLE {
@@ -30,6 +32,22 @@ namespace {
   std::atomic<Sample*> RecordsPtr {nullptr};
   Sample* Records = nullptr;
   std::atomic<uint32_t> Count {0};
+
+  // Snapshot mode (`/dev/shm/fex-<pid>-snapshot`): every thread of the process is signalled once and stores its x86 state, which
+  // includes threads blocked in system calls that the sampler above skips. Used to find what a wedged thread is waiting in.
+  struct SnapRecord {
+    uint64_t Tid;
+    uint64_t HostPC;
+    uint64_t Rip;
+    uint64_t Spare;
+    uint64_t Gregs[16]; ///< x86 order: rax rcx rdx rbx rsp rbp rsi rdi r8-r15
+    uint64_t Stack[60]; ///< guest stack at rsp
+  };
+  static_assert(sizeof(SnapRecord) == 80 * 8);
+  constexpr size_t MaxSnaps = 1024;
+  SnapRecord* Snaps = nullptr;
+  std::atomic<uint32_t> SnapCount {0};
+  std::atomic<bool> SnapMode {false};
 
   // Threads worth sampling in "all threads" mode: the busy-prone ones. A process has hundreds of mostly idle threads
   // (Unity workers, thread pools); signalling all of them at the sampling rate would perturb what is measured. Samples
@@ -79,6 +97,36 @@ namespace {
     return true;
   }
 
+  void TakeSnapshot(pid_t Pid) {
+    if (!Snaps) {
+      const std::string Path = "/dev/shm/fex-" + std::to_string(Pid) + "-snap";
+      const int fd = open(Path.c_str(), O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+      if (fd < 0 || ftruncate(fd, sizeof(SnapRecord) * MaxSnaps) != 0) {
+        return;
+      }
+      void* Map = mmap(nullptr, sizeof(SnapRecord) * MaxSnaps, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+      close(fd);
+      if (Map == MAP_FAILED) {
+        return;
+      }
+      Snaps = static_cast<SnapRecord*>(Map);
+    }
+    memset(Snaps, 0, sizeof(SnapRecord) * MaxSnaps);
+    SnapCount = 0;
+    SnapMode = true;
+    if (DIR* D = opendir("/proc/self/task")) {
+      while (auto* E = readdir(D)) {
+        const pid_t Tid = atoi(E->d_name);
+        if (Tid > 0 && Tid != static_cast<pid_t>(syscall(SYS_gettid))) {
+          syscall(SYS_tgkill, Pid, Tid, SIGPROF);
+        }
+      }
+      closedir(D);
+    }
+    usleep(700000); // let every handler finish
+    SnapMode = false;
+  }
+
   void* SamplerThread(void* Arg) {
     const uint32_t Hz = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(Arg) & 0xffff);
     const bool All = (reinterpret_cast<uintptr_t>(Arg) >> 16) != 0;
@@ -87,7 +135,13 @@ namespace {
     // starting the profiler never perturbs process start-up (an anti-cheat launcher may be ptracing us then) or the other
     // FEX processes of the same application.
     const std::string Trigger = "/dev/shm/fex-" + std::to_string(Pid) + "-sample-on";
+    const std::string SnapTrigger = "/dev/shm/fex-" + std::to_string(Pid) + "-snapshot";
     for (;;) {
+      if (access(SnapTrigger.c_str(), F_OK) == 0) {
+        unlink(SnapTrigger.c_str());
+        TakeSnapshot(Pid);
+        continue;
+      }
       if (access(Trigger.c_str(), F_OK) != 0) {
         usleep(100000);
         continue;
@@ -125,6 +179,26 @@ void StartSamplingProfiler(FEX::HLE::SignalDelegator* Signals, uint32_t Hz, bool
   Signals->RegisterHostSignalHandler(
     SIGPROF,
     [](FEXCore::Core::InternalThreadState* Thread, int, void*, void* UContext) {
+      if (SnapMode.load(std::memory_order_relaxed)) {
+        const uint32_t SIdx = SnapCount.fetch_add(1, std::memory_order_relaxed);
+        if (Snaps && SIdx < MaxSnaps) {
+          SnapRecord& R = Snaps[SIdx];
+          R.Tid = static_cast<uint64_t>(syscall(SYS_gettid));
+          R.HostPC = ArchHelpers::Context::GetPc(UContext);
+          if (Thread) {
+            const auto& St = Thread->CurrentFrame->State;
+            R.Rip = St.rip;
+            for (unsigned i = 0; i < 16; ++i) {
+              R.Gregs[i] = St.gregs[i];
+            }
+            // process_vm_readv on ourselves reads the guest stack without risking a fault in the handler
+            iovec Local {R.Stack, sizeof(R.Stack)};
+            iovec Remote {reinterpret_cast<void*>(St.gregs[FEXCore::X86State::REG_RSP]), sizeof(R.Stack)};
+            process_vm_readv(getpid(), &Local, 1, &Remote, 1, 0);
+          }
+        }
+        return true;
+      }
       const uint32_t Idx = Count.fetch_add(1, std::memory_order_relaxed);
       if (Records && Idx < MaxSamples) {
         Records[Idx] = {ArchHelpers::Context::GetPc(UContext),
