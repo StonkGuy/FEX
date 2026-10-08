@@ -719,6 +719,16 @@
           "Should only be used for applications that have issues with this set."
         ]
       },
+      "EnableCPUIDFaulting": {
+        "Type": "bool",
+        "Default": "false",
+        "AffectsCodeGen": "true",
+        "Desc": [
+          "Honour ARCH_SET_CPUID. When a guest thread calls arch_prctl(ARCH_SET_CPUID, 0), CPUID from that",
+          "thread raises a #GP (SIGSEGV, si_code SI_KERNEL) like Linux with a CPUID-faulting CPU, instead of",
+          "executing transparently. Off by default, so a guest that never asks for it is unaffected."
+        ]
+      },
       "StartupSleep": {
         "Type": "uint32",
         "Default": "0",
