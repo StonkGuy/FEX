@@ -936,6 +936,39 @@ void SignalDelegator::UninstallHostHandler(int Signal) {
   ::syscall(SYS_rt_sigaction, Signal, &SignalHandler.OldAction, nullptr, 8);
 }
 
+void SignalDelegator::ForceGuestSigSegv(uint64_t BadSP) {
+  // Log once, with the address that could not be used. This is the signal-frame equivalent of the "signals in
+  // dispatcher" log: an unusual condition worth one line, not a message per delivery.
+  static std::atomic<bool> Logged {false};
+  if (!Logged.exchange(true, std::memory_order_relaxed)) {
+    LogMan::Msg::EFmt("Cannot write the guest signal frame at stack pointer 0x{:x}; forcing SIGSEGV "
+                      "(Linux force_sigsegv). The guest stack pointer is not a live, writable mapping.",
+                      BadSP);
+  }
+
+  // The guest handler must not run, and the disposition must not be re-read as the guest's action: otherwise the
+  // re-raised SIGSEGV would re-enter SetupFrame_x64 with the same bad SP. force_sigsegv resets to SIG_DFL first.
+  SignalHandler& Handler = HostHandlers[SIGSEGV];
+  Handler.GuestAction.sigaction_handler.handler = SIG_DFL;
+  Handler.OldAction.handler = SIG_DFL;
+  ::signal(SIGSEGV, SIG_DFL);
+
+  CTX->FlushAndCloseCodeMap();
+  FEX::HLE::_SyscallHandler->TM.CleanupForExit();
+
+  // Now die from SIGSEGV itself, so the parent sees a signal death (WTERMSIG == SIGSEGV), exactly as Linux reports
+  // force_sigsegv. The host disposition is SIG_DFL, so raise() cannot re-enter FEX. When the guest signal being set up
+  // is itself a SIGSEGV we are inside FEX's host SIGSEGV handler, where the kernel blocks SIGSEGV: unblock it, as
+  // force_sigsegv does, or the raise would stay pending and only this thread would exit.
+  uint64_t SegvMask = 1ULL << (SIGSEGV - 1);
+  ::syscall(SYS_rt_sigprocmask, SIG_UNBLOCK, &SegvMask, nullptr, 8);
+  ::raise(SIGSEGV);
+
+  // Unreachable barring a blocked SIGSEGV: nothing has set up a guest frame to return into.
+  ::syscall(SYS_exit, 128 + SIGSEGV);
+  FEX_UNREACHABLE;
+}
+
 void SignalDelegator::QueueSignal(pid_t tgid, pid_t tid, int Signal, siginfo_t* info, bool IgnoreMask) {
   bool WasIgnored {};
   bool WasMasked {};

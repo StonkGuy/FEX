@@ -106,6 +106,10 @@ public:
   void UninstallHostHandler(int Signal);
   void QueueSignal(pid_t tgid, pid_t tid, int Signal, siginfo_t* info, bool IgnoreMask);
 
+  // Terminate this thread the way Linux's force_sigsegv does: force the SIGSEGV disposition to SIG_DFL, log the
+  // offending address once, clean up, and die from SIGSEGV. Used when the guest signal frame cannot be written.
+  [[noreturn]] void ForceGuestSigSegv(uint64_t BadSP);
+
   void SetVDSOSymbols() {
     // Get symbols from VDSO.
     VDSOPointers = FEX::VDSO::GetVDSOSymbols();

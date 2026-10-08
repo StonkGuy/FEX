@@ -7,6 +7,7 @@ $end_info$
 */
 
 #include "LinuxSyscalls/SignalDelegator.h"
+#include "LinuxSyscalls/Syscalls.h"
 
 #include <FEXCore/Core/Context.h>
 #include <FEXCore/Core/SignalDelegator.h>
@@ -14,12 +15,15 @@ $end_info$
 #include <FEXCore/Utils/ArchHelpers/Arm64.h>
 #include <FEXCore/Utils/FPState.h>
 #include <FEXCore/Utils/MathUtils.h>
+#include <FEXCore/Utils/SignalScopeGuards.h>
 
+#include <algorithm>
 #include <csignal>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <type_traits>
+#include <unistd.h>
 
 namespace FEX::HLE {
 constexpr uint32_t X86_SA_RESTORER = 0x04000000;
@@ -397,9 +401,56 @@ void SignalDelegator::RestoreRTFrame_ia32(FEXCore::Core::InternalThreadState* Th
   }
 }
 
+// True when every page the signal frame can touch is writable in the guest address space. The frame is written with
+// plain stores, so a page that is not mapped -- or mapped read-only -- would fault inside FEX's own host signal
+// handler. The guest VMA table already describes exactly that address space (it is what the SIGSEGV handler consults
+// to decide whether a fault is the guest's), so use it rather than probing with a load/store: a probe faults inside
+// the nested signal handler, where the fault-safe accessor that would consume it is not reached. [Begin, End) is the
+// region; End is exclusive.
+static bool GuestFrameWritable(uint64_t Begin, uint64_t End) {
+  if (End < Begin) {
+    // The arithmetic wrapped: the stack pointer is not a plausible address at all.
+    return false;
+  }
+
+  auto& VMATracking = FEX::HLE::_SyscallHandler->VMATracking;
+
+  constexpr uint64_t PageSize = 4096;
+  // A signal frame is a few KiB; bound the walk so a pathological pointer cannot spin here.
+  constexpr uint64_t MaxPages = 4096;
+  const uint64_t FirstPage = Begin & ~(PageSize - 1);
+  const uint64_t LastPage = End & ~(PageSize - 1);
+
+  // The SIGSEGV handler takes this same lock; masking signals around it is the established pattern for reading the
+  // table at a point where a signal could arrive.
+  auto lk = FEXCore::MaskSignalsAndLockMutex<std::shared_lock>(VMATracking.Mutex);
+
+  for (uint64_t Page = FirstPage, PageCount = 0; Page <= LastPage; Page += PageSize, ++PageCount) {
+    if (PageCount >= MaxPages) {
+      return false;
+    }
+
+    const auto Entry = VMATracking.FindVMAEntry(Page);
+    if (Entry == VMATracking.VMAs.end()) {
+      // No guest mapping covers this page: the store would not be a guest access.
+      return false;
+    }
+
+    // The entry that covers the start of the page must be writable, and must extend through the whole page.
+    if (!Entry->second.Prot.Writable || (Entry->first + Entry->second.Length) < (Page + PageSize)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 uint64_t SignalDelegator::SetupFrame_x64(FEXCore::Core::InternalThreadState* Thread, ArchHelpers::Context::ContextBackup* ContextBackup,
                                          FEXCore::Core::CpuStateFrame* Frame, int Signal, siginfo_t* HostSigInfo, void* ucontext,
                                          GuestSigAction* GuestAction, stack_t* GuestStack, uint64_t NewGuestSP, const uint32_t eflags) {
+  // The stack pointer the frame is built under, before any of the adjustments below. Reported as si_addr if the frame
+  // cannot be written (Linux uses the interrupted SP for the forced SIGSEGV).
+  const uint64_t RequestedGuestSP = NewGuestSP;
 
   // Back up past the redzone, which is 128bytes
   // 32-bit doesn't have a redzone
@@ -440,6 +491,21 @@ uint64_t SignalDelegator::SetupFrame_x64(FEXCore::Core::InternalThreadState* Thr
   ContextBackup->FPStateLocation = FPStateLocation;
   ContextBackup->UContextLocation = UContextLocation;
   ContextBackup->SigInfoLocation = SigInfoLocation;
+
+  // The frame lives in [UContextLocation, ...) and the highest byte written is in the fpstate / ucontext / the host
+  // stack word. Check the whole span before the first store touches it.
+  const uint64_t UContextEnd = UContextLocation + sizeof(FEXCore::x86_64::ucontext_t);
+  const uint64_t FPStateEnd =
+    FPStateLocation + (SupportsAVX ? sizeof(FEXCore::x86_64::xstate) : sizeof(FEXCore::x86_64::_libc_fpstate));
+  const uint64_t HostStackEnd = HostStackLocation + sizeof(uint64_t);
+  const uint64_t FrameEnd = std::max({UContextEnd, FPStateEnd, HostStackEnd});
+
+  if (!GuestFrameWritable(UContextLocation, FrameEnd)) {
+    // Linux: signal_64.c's setup_rt_frame faults copying the frame, takes the Efault path and calls
+    // force_sigsegv(SIGSEGV, current), which forces the disposition to SIG_DFL and kills the thread with SIGSEGV.
+    // Doing anything else here means writing into whatever host mapping happens to sit at that address.
+    ForceGuestSigSegv(RequestedGuestSP);
+  }
 
   FEXCore::x86_64::ucontext_t* guest_uctx = reinterpret_cast<FEXCore::x86_64::ucontext_t*>(UContextLocation);
   siginfo_t* guest_siginfo = reinterpret_cast<siginfo_t*>(SigInfoLocation);
