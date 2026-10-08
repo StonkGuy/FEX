@@ -195,6 +195,11 @@ public:
     return static_cast<FEX::HLE::ThreadStateObject*>(Thread->FrontendPtr);
   }
 
+  ///< The ThreadStateObject of the calling thread (null before the frontend registers it). Lets code without a
+  ///< CpuStateFrame - e.g. the synthesized /proc/<pid>/status - read the calling thread's emulated state.
+  static FEX::HLE::ThreadStateObject* GetCurrentThreadObject();
+  static void SetCurrentThreadObject(FEX::HLE::ThreadStateObject* Thread);
+
   FEX_CONFIG_OPT(EnableCPUIDFaulting, ENABLECPUIDFAULTING);
 
   FEX::HLE::ThreadStateObject* CreateThread(const FEXCore::Core::CPUState* NewThreadState = nullptr, uint64_t ParentTID = 0,

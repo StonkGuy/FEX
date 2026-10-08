@@ -10,6 +10,7 @@ $end_info$
 
 #include "Common/CPUInfo.h"
 #include "Common/FDUtils.h"
+#include "LinuxSyscalls/PtraceEmu.h"
 #include "LinuxSyscalls/Syscalls.h"
 #include "LinuxSyscalls/EmulatedFiles/EmulatedFiles.h"
 
@@ -591,6 +592,14 @@ EmulatedFDManager::EmulatedFDManager(FEXCore::Context::Context* ctx)
   FDReadCreators[procAuxv] = &EmulatedFDManager::ProcAuxv;
   FDReadCreators["/proc/self/auxv"] = &EmulatedFDManager::ProcAuxv;
 
+  // /proc/<pid>/status: on a real kernel this reports the process's own state, so the two debugger-facing lines
+  // must not be the host FEX process's values. Our host state is FEX's, not the emulated process's, so rewrite
+  // Seccomp: to the emulated seccomp mode (ThreadStateObject::SeccompMode) and TracerPid: to the emulated
+  // tracer state. Every other line is passed through from the host file unchanged: nothing else is fabricated.
+  fextl::string procStatus = fextl::fmt::format("/proc/{}/status", getpid());
+  FDReadCreators[procStatus] = &EmulatedFDManager::ProcStatus;
+  FDReadCreators["/proc/self/status"] = &EmulatedFDManager::ProcStatus;
+
   if (ThreadsConfig > 1) {
     cpus_online = fextl::fmt::format("0-{}", ThreadsConfig - 1);
   } else {
@@ -611,6 +620,66 @@ int32_t EmulatedFDManager::Open(const char* pathname, int flags, uint32_t mode) 
   }
 
   return Creator->second(CTX, AT_FDCWD, pathname, flags, mode);
+}
+
+int32_t EmulatedFDManager::ProcStatus(FEXCore::Context::Context* ctx, int32_t fd, const char* pathname, int32_t flags, mode_t mode) {
+  char Buf[8192];
+  ssize_t Len = 0;
+  {
+    // Read the host's own status (this FEX process), then patch the two lines that describe the emulated process.
+    int HostFD = ::open("/proc/self/status", O_RDONLY | O_CLOEXEC);
+    if (HostFD >= 0) {
+      Len = ::read(HostFD, Buf, sizeof(Buf) - 1);
+      ::close(HostFD);
+    }
+  }
+  if (Len < 0) {
+    Len = 0;
+  }
+  Buf[Len] = '\0';
+
+  // Emulated seccomp mode (SECCOMP_MODE_DISABLED/STRICT/FILTER), matching seccomp(2)/prctl(PR_GET_SECCOMP).
+  uint32_t SeccompMode = SECCOMP_MODE_DISABLED;
+  if (auto* Thread = FEX::HLE::ThreadManager::GetCurrentThreadObject()) {
+    SeccompMode = Thread->SeccompMode;
+  }
+
+  fextl::string Out;
+  Out.reserve(Len + 64);
+  const char* Cursor = Buf;
+  while (*Cursor) {
+    const char* Eol = strchr(Cursor, '\n');
+    const size_t LineLen = Eol ? static_cast<size_t>(Eol - Cursor) + 1 : strlen(Cursor);
+    if (strncmp(Cursor, "Seccomp:", 8) == 0) {
+      Out += fextl::fmt::format("Seccomp:\t{}\n", SeccompMode);
+    } else if (strncmp(Cursor, "TracerPid:", 10) == 0) {
+      // Linux reports the pid of the process's *ptracer* (fs/proc/array.c task_state -> ptrace_parent). If the
+      // emulated process is traced by an in-guest tracer (PtraceEmu emulates PTRACE_TRACEME/SYSCALL), the host
+      // TracerPid is that tracer, so it is passed through unchanged. Otherwise the emulated process genuinely
+      // has no tracer - the host value, if any, belongs to a debugger outside the emulated world that the
+      // emulated process cannot see - so a real kernel would report 0. Nothing is hidden either way.
+      if (FEX::HLE::PtraceEmu::IsAttached()) {
+        Out.append(Cursor, LineLen);
+      } else {
+        Out += "TracerPid:\t0\n";
+      }
+    } else {
+      Out.append(Cursor, LineLen);
+      if (!Eol) {
+        break;
+      }
+    }
+    if (!Eol) {
+      break;
+    }
+    Cursor = Eol + 1;
+  }
+
+  int NewFD = GenTmpFD(pathname, flags);
+  write(NewFD, Out.data(), Out.size());
+  lseek(NewFD, 0, SEEK_SET);
+  SealTmpFD(NewFD);
+  return NewFD;
 }
 
 int32_t EmulatedFDManager::ProcAuxv(FEXCore::Context::Context* ctx, int32_t fd, const char* pathname, int32_t flags, mode_t mode) {
