@@ -546,11 +546,17 @@ void RegisterThread(FEX::HLE::SyscallHandler* Handler) {
       Result = -EINVAL; // We don't support CET, return EINVAL
       break;
     case 0x1011: // ARCH_GET_CPUID
-      return 1;
-      break;
-    case 0x1012:      // ARCH_SET_CPUID
-      return -ENODEV; // Claim we don't support faulting on CPUID
-      break;
+      // Linux returns !TIF_NOCPUID (arch/x86/kernel/process.c get_cpuid_mode): the live faulting state.
+      // Without the config option FEX behaves like a CPU without CPUID faulting (always enabled).
+      return FEX::HLE::_SyscallHandler->TM.EnableCPUIDFaulting() ? (Frame->CPUIDFault == 0) : 1;
+    case 0x1012: // ARCH_SET_CPUID
+      if (!FEX::HLE::_SyscallHandler->TM.EnableCPUIDFaulting()) {
+        // No CPUID-faulting support: a real kernel returns -ENODEV here.
+        return -ENODEV;
+      }
+      // cpuid_enabled != 0 enables CPUID, 0 disables it (which makes CPUID raise #GP; see CPUIDOp).
+      Frame->CPUIDFault = addr ? 0 : 1;
+      return 0;
     default:
       LogMan::Msg::EFmt("Unknown prctl: 0x{:x}", code);
       Result = -EINVAL;

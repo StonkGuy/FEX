@@ -463,6 +463,14 @@ struct CpuStateFrame {
 
   uint32_t SignalHandlerRefCounter {};
 
+  /**
+   * @brief Non-zero while a #GP on CPUID should be raised (arch_prctl ARCH_SET_CPUID(0)).
+   *
+   * Linux implements this by turning on CPUID faulting in the CPU, after which a user CPUID raises #GP;
+   * the kernel then delivers SIGSEGV with si_code SI_KERNEL. FEX has to emit the fault itself.
+   */
+  uint32_t CPUIDFault {};
+
   InternalThreadState* Thread;
 
 #ifdef _WIN32

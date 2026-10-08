@@ -195,6 +195,8 @@ public:
     return static_cast<FEX::HLE::ThreadStateObject*>(Thread->FrontendPtr);
   }
 
+  FEX_CONFIG_OPT(EnableCPUIDFaulting, ENABLECPUIDFAULTING);
+
   FEX::HLE::ThreadStateObject* CreateThread(const FEXCore::Core::CPUState* NewThreadState = nullptr, uint64_t ParentTID = 0,
                                             FEX::HLE::ThreadStateObject* InheritThread = nullptr);
   void TrackThread(FEX::HLE::ThreadStateObject* Thread) {
