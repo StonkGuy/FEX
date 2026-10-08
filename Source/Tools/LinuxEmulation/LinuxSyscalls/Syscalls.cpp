@@ -1037,10 +1037,12 @@ void SyscallHandler::UnlockAfterFork(FEXCore::Core::InternalThreadState* LiveThr
 void SyscallHandler::RegisterTLSState(FEX::HLE::ThreadStateObject* Thread) {
   SignalDelegation->RegisterTLSState(Thread);
   ThunkHandler->RegisterTLSState(Thread);
+  FEX::HLE::ThreadManager::SetCurrentThreadObject(Thread);
 }
 
 void SyscallHandler::UninstallTLSState(FEX::HLE::ThreadStateObject* Thread) {
   SignalDelegation->UninstallTLSState(Thread);
+  FEX::HLE::ThreadManager::SetCurrentThreadObject(nullptr);
 }
 
 static bool isHEX(char c) {
