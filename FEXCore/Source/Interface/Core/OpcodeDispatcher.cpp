@@ -1373,6 +1373,38 @@ void OpDispatchBuilder::CPUIDOp(OpcodeArgs) {
   Ref Src = LoadGPRRegister(X86State::REG_RAX);
   Ref Leaf = LoadGPRRegister(X86State::REG_RCX);
 
+  // ARCH_SET_CPUID(0) makes a real kernel (with CPUID faulting) raise #GP on CPUID from this thread; #GP in
+  // user mode is delivered as SIGSEGV with si_code SI_KERNEL (arch/x86/kernel/traps.c, force_sig). Emit that
+  // fault in the frontend when the per-thread flag is set, instead of executing CPUID transparently.
+  if (CTX->Config.EnableCPUIDFaulting()) {
+    auto FaultBlock = CreateNewCodeBlockAfter(GetCurrentBlock());
+    auto ContinueBlock = CreateNewCodeBlockAfter(FaultBlock);
+
+    auto Fault = _LoadContextGPR(OpSize::i32Bit, offsetof(FEXCore::Core::CpuStateFrame, CPUIDFault));
+    // Fault == 0 (CPUID enabled): fall through to the normal CPUID. Non-zero: take the #GP block.
+    auto CondJump_ = CondJump(Fault, CondClass::EQ);
+    SetTrueJumpTarget(CondJump_, ContinueBlock);
+    SetFalseJumpTarget(CondJump_, FaultBlock);
+
+    SetCurrentCodeBlock(FaultBlock);
+    StartNewBlock();
+
+    // The #GP is a fault, so RIP points at the CPUID instruction itself.
+    auto NewRIP = GetRelocatedPC(Op, -Op->InstSize);
+    _StoreContextGPR(GetGPROpSize(), NewRIP, offsetof(FEXCore::Core::CPUState, rip));
+
+    IR::BreakDefinition Reason {};
+    Reason.ErrorRegister = 0;
+    Reason.Signal = Core::FAULT_SIGSEGV;
+    Reason.TrapNumber = X86State::X86_TRAPNO_GP;
+    Reason.si_code = 0x80; // SI_KERNEL
+    BlockSetRIP = true;
+    Break(Reason);
+
+    SetCurrentCodeBlock(ContinueBlock);
+    StartNewBlock();
+  }
+
   Ref RAX = _AllocateGPR(false);
   Ref RBX = _AllocateGPR(false);
   Ref RCX = _AllocateGPR(false);
