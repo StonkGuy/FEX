@@ -595,8 +595,10 @@ int main(int argc, char** argv, char** const envp) {
   // Create a thread without a RIP or stack pointer setup initially.
   auto ParentThread = SyscallHandler->TM.CreateThread();
   SyscallHandler->TM.TrackThread(ParentThread);
-  SignalDelegation->RegisterTLSState(ParentThread);
-  ThunkHandler->RegisterTLSState(ParentThread);
+  // Register through the SyscallHandler, not the signal delegator and thunk handler directly: the wrapper
+  // also records the thread as ThreadManager's current thread, which the synthesized /proc/<pid>/status
+  // reads to report the process's own Seccomp: line.
+  SyscallHandler->RegisterTLSState(ParentThread);
 
   SyscallHandler->DeserializeSeccompFD(ParentThread, FEXSeccompFD);
 

@@ -159,6 +159,19 @@ void ThreadManager::StatAlloc::UnlockAfterFork(FEXCore::Core::InternalThreadStat
   ThreadObject->Thread->ThreadStats = AllocateSlot(ThreadObject->ThreadInfo.TID);
 }
 
+// The ThreadStateObject of the calling thread. Set in SyscallHandler::RegisterTLSState, cleared on thread exit.
+// A frontend must register a thread through SyscallHandler::RegisterTLSState, not the signal delegator or
+// thunk handler directly, or this stays unset for that thread.
+static thread_local FEX::HLE::ThreadStateObject* CurrentThreadObject {};
+
+FEX::HLE::ThreadStateObject* ThreadManager::GetCurrentThreadObject() {
+  return CurrentThreadObject;
+}
+
+void ThreadManager::SetCurrentThreadObject(FEX::HLE::ThreadStateObject* Thread) {
+  CurrentThreadObject = Thread;
+}
+
 uint64_t ThreadManager::SetSignalMask(uint64_t Mask) {
   ::syscall(SYSCALL_DEF(rt_sigprocmask), SIG_SETMASK, &Mask, &Mask, 8);
   return Mask;
