@@ -32,6 +32,11 @@ $end_info$
 
 namespace FEX::HLE::PtraceEmu {
 namespace {
+  // x86-64 regset type for the extended (xsave) state. The host headers are aarch64 and do not define it.
+#ifndef NT_X86_XSTATE
+  constexpr uintptr_t NT_X86_XSTATE = 0x202;
+#endif
+
   // Layout of the x86-64 `struct user_regs_struct` (slot indices).
   enum UserReg : unsigned {
     R15, R14, R13, R12, Rbp, Rbx, R11, R10, R9, R8, Rax, Rcx, Rdx, Rsi, Rdi, OrigRax, Rip, Cs, Eflags, Rsp, Ss, FsBase, GsBase, Ds, Es, Fs, Gs,
@@ -313,6 +318,10 @@ namespace {
     uintptr_t StaticAddr = 0;   // otherwise: address of the tracee image's static SharedState
     std::array<uint8_t, 512> FpRegs {}; // shadow of the tracee's x87/SSE state for NT_PRFPREG round trips
     bool FpValid = false;
+    std::array<uint8_t, 4096> XState {}; // shadow of the tracee's extended state for NT_X86_XSTATE round trips
+    // FEX does not model the xsave vector state, so this stays zero-filled (the emulated process has no
+    // extended state); it exists so a tracer gets data instead of the -EPERM an unknown regset used to give.
+    bool XStateValid = false;
   };
   std::mutex RemotesLock;
   std::unordered_map<pid_t, Remote> Remotes;
@@ -496,6 +505,15 @@ namespace {
       return -EINVAL;
     }
     return WriteWord(Pid, offsetof(SharedState, DebugRegs) + 7 * sizeof(uint64_t), Value) ? 0 : -ESRCH;
+  }
+
+  Remote* XStateState(pid_t Pid) {
+    std::lock_guard lk(RemotesLock);
+    Remote* R = Lookup(Pid);
+    if (R && !R->XStateValid) {
+      R->XStateValid = true;
+    }
+    return R;
   }
 
   Remote* FpState(pid_t Pid) {
@@ -877,7 +895,31 @@ bool HandleRequest(int Request, pid_t Pid, void* Addr, void* Data, uint64_t* Res
       *Result = 0;
       return true;
     }
-    return false;
+
+    if (NtType == NT_X86_XSTATE) {
+      // Known x86-64 regset: Linux returns the xstate data (or -EINVAL if iov_len is not a multiple of the
+      // regset size). FEX does not track the vector state, so the shadow is zero-filled, but the request
+      // succeeds with data instead of returning -EPERM for an unknown type.
+      Remote* R = XStateState(Pid);
+      if (!R) {
+        *Result = static_cast<uint64_t>(-ESRCH);
+        return true;
+      }
+      const size_t Len = std::min(Iov->iov_len, R->XState.size());
+      if (Get) {
+        std::memcpy(Iov->iov_base, R->XState.data(), Len);
+      } else {
+        std::memcpy(R->XState.data(), Iov->iov_base, Len);
+      }
+      Iov->iov_len = Len;
+      *Result = 0;
+      return true;
+    }
+
+    // Any other regset (e.g. the NT_ARM_* sets, which do not exist in the x86-64 view) is unknown to this
+    // emulated kernel: ptrace_regset() returns -EINVAL for !regset, never -EPERM (kernel/ptrace.c).
+    *Result = static_cast<uint64_t>(-EINVAL);
+    return true;
   }
 
   default: return false;
