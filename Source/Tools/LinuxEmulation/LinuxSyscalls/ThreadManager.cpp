@@ -246,8 +246,9 @@ ThreadManager::CreateThread(const FEXCore::Core::CPUState* NewThreadState, uint6
     }
   } else {
     // Without any thread data to inherit, setup the default gdt.
-    // Default code segment indexes match the numbers that the Linux kernel uses.
-    Frame->State.cs_idx = FEXCore::Core::CPUState::DEFAULT_USER_CS << 3;
+    // The selectors match what the Linux kernel reports: __USER_CS = 0x33 and __USER_DS = 0x2b, both with RPL 3.
+    Frame->State.cs_idx =
+      Is64BitMode() ? FEXCore::Core::CPUState::DEFAULT_USER_CS_SEL : FEXCore::Core::CPUState::DEFAULT_USER32_CS_SEL;
     auto GDT = FEXCore::Core::CPUState::GetSegmentFromIndex(Frame->State, Frame->State.cs_idx);
     FEXCore::Core::CPUState::SetGDTBase(GDT, 0);
     FEXCore::Core::CPUState::SetGDTLimit(GDT, 0xF'FFFFU);
@@ -261,6 +262,18 @@ ThreadManager::CreateThread(const FEXCore::Core::CPUState* NewThreadState, uint6
       GDT->L = 0; // L = Long Mode = 32-bit
       GDT->D = 1; // D = Default Operand Size = 32-bit
     }
+
+    // The stack segment. A 64-bit process has SS = __USER_DS; Linux also permits a 32-bit SS in a 64-bit process, but
+    // that is part of the interrupted context and restored by rt_sigreturn, not the reset-to-default value used here.
+    Frame->State.ss_idx = FEXCore::Core::CPUState::DEFAULT_USER_DS_SEL;
+    auto SSGDT = FEXCore::Core::CPUState::GetSegmentFromIndex(Frame->State, Frame->State.ss_idx);
+    FEXCore::Core::CPUState::SetGDTBase(SSGDT, 0);
+    FEXCore::Core::CPUState::SetGDTLimit(SSGDT, 0xF'FFFFU);
+    // SS is a data segment: L is reserved (0) and D is the default operand size; neither is consulted for 64-bit
+    // stack accesses, which are always 64-bit.
+    SSGDT->L = 0;
+    SSGDT->D = 1;
+    Frame->State.ss_cached = FEXCore::Core::CPUState::CalculateGDTBase(*SSGDT);
   }
 
   if (InheritThread) {
