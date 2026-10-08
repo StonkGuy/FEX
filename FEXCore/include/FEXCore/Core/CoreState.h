@@ -242,7 +242,17 @@ struct alignas(64) CPUState {
   }
 
   // TODO: This should be moved to the frontend.
+  // GDT indexes matching the Linux x86-64 kernel: __USER_CS = 0x33 is index 6, __USER_DS = 0x2b is index 5.
   constexpr static uint32_t DEFAULT_USER_CS = 6;
+  constexpr static uint32_t DEFAULT_USER_DS = 5;
+
+  // The selector form of the two defaults: index combined with RPL 3. A guest that reads `mov %cs` / `mov %ss`, or a
+  // signal frame compared against a real kernel, sees the selector, not the bare index.
+  constexpr static uint32_t DEFAULT_USER_CS_SEL = (DEFAULT_USER_CS << 3) | 3; // 0x33
+  constexpr static uint32_t DEFAULT_USER_DS_SEL = (DEFAULT_USER_DS << 3) | 3; // 0x2b
+  // A 32-bit process uses __USER32_CS = 0x23 (index 4 | RPL 3); __USER32_DS is the same 0x2b. Kept here so the frame
+  // and `mov %cs` cannot regress to the bare 0x30 for 32-bit guests.
+  constexpr static uint32_t DEFAULT_USER32_CS_SEL = 0x23;
 
   // Follows encoding of the TI bit in segment selector encoding.
   constexpr static uint32_t SEGMENT_ARRAY_INDEX_GDT = 0;
