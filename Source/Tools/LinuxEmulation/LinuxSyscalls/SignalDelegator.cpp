@@ -273,9 +273,19 @@ void SignalDelegator::RestoreThreadState(FEXCore::Core::InternalThreadState* Thr
     SigTrace::Log(ThreadObject->ThreadInfo.TID, SigTrace::SigReturn, 0, Thread->CurrentFrame->State.gregs[FEXCore::X86State::REG_RSP],
                   Context->GuestSignalMask);
     if (Type != RestoreType::TYPE_PAUSE && SignalMaskFix()) {
-      // The guest handler is done: the guest-visible mask goes back to what the interrupted code had, and anything that became
-      // unmasked and was only recorded as pending is raised again.
-      ThreadObject->SignalInfo.CurrentSignalMask.Val = Context->GuestSignalMask;
+      // The guest handler is done: the guest-visible mask goes back to what the handler left in the frame's uc_sigmask,
+      // which is what Linux installs (signal_64.c rt_sigreturn reads frame->uc.uc_sigmask and calls set_current_blocked
+      // before restoring the context). For an untouched frame that is the interrupted mask sigmask_to_save() wrote on
+      // delivery, i.e. Context->GuestSignalMask; a handler that saved or rewrote uc_sigmask gets its value honoured.
+      // The ia32 frames use a different layout, so only the 64-bit path takes the field; anything that became unmasked
+      // and was only recorded as pending is raised again either way.
+      uint64_t NewGuestMask = Context->GuestSignalMask;
+      if (Is64BitMode && Context->UContextLocation) {
+        auto* GuestUContext = reinterpret_cast<FEXCore::x86_64::ucontext_t*>(Context->UContextLocation);
+        // set_current_blocked() drops SIGKILL and SIGSTOP from whatever the frame holds: they can never be blocked.
+        NewGuestMask = GuestUContext->uc_sigmask.val[0] & ~((1ULL << (SIGKILL - 1)) | (1ULL << (SIGSTOP - 1)));
+      }
+      ThreadObject->SignalInfo.CurrentSignalMask.Val = NewGuestMask;
       CheckForPendingSignals(ThreadObject);
     }
   }
