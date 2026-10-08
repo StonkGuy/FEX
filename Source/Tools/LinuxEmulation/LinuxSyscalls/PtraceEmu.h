@@ -67,6 +67,7 @@ struct SharedState {
   volatile uint64_t PendingArgs[6];
   volatile uint64_t PendingRet;
   volatile uint64_t Regs[NumUserRegs]; ///< x86-64 user_regs_struct image at the stop
+  volatile uint64_t DebugRegs[8];      ///< x86-64 DR0-DR7 shadow (DR4/DR5 do not exist; see PtraceEmu.cpp)
   volatile uint64_t DirtyMask;         ///< bit i set: the tracer wrote Regs[i]; apply it when resuming
   volatile uint64_t SignalNumber;      ///< Non-zero: the pending stop is a signal-delivery stop for this signal
   volatile uint64_t FlushAddr;         ///< The tracer wrote tracee memory: invalidate translated code here
