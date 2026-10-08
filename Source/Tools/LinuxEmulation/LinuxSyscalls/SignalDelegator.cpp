@@ -175,6 +175,7 @@ ArchHelpers::Context::ContextBackup* SignalDelegator::StoreThreadState(FEXCore::
   Context->InSyscallInfo = 0;
   Context->ClearedSyscallInfo = 0;
   Context->GuestSignalMask = 0;
+  Context->SeccompTrapRIP = 0;
 
   // Store fault to top status and then reset it
   Context->FaultToTopAndGeneratedException = Thread->CurrentFrame->SynchronousFaultData.FaultToTopAndGeneratedException;
@@ -305,9 +306,19 @@ void SignalDelegator::RestoreThreadState(FEXCore::Core::InternalThreadState* Thr
 
 bool SignalDelegator::HandleDispatcherGuestSignal(FEXCore::Core::InternalThreadState* Thread, int Signal, void* info, void* ucontext,
                                                   GuestSigAction* GuestAction, stack_t* GuestStack) {
+  auto ThreadObject = FEX::HLE::ThreadManager::GetStateObjectFromFEXCoreThread(Thread);
+
   auto ContextBackup = StoreThreadState(Thread, Signal, ucontext);
   // Remember the guest-visible mask of the interrupted code: rt_sigreturn puts it back (SignalMaskFix).
-  ContextBackup->GuestSignalMask = FEX::HLE::ThreadManager::GetStateObjectFromFEXCoreThread(Thread)->SignalInfo.CurrentSignalMask.Val;
+  ContextBackup->GuestSignalMask = ThreadObject->SignalInfo.CurrentSignalMask.Val;
+
+  // A SECCOMP_RET_TRAP SIGSYS reports the instruction *after* the trapped syscall, so present the handler with that
+  // address in its ucontext (Linux does the same). The frame's RIP, and therefore OriginalRIP, is still the `syscall`
+  // itself, so the ucontext RIP now differs from it: rt_sigreturn then takes the path that restores the handler's
+  // registers and resumes at the ucontext RIP, instead of the path that resets to the interrupted state and re-runs
+  // the syscall (discarding the handler's return value). See SeccompEmulator for the kernel semantics.
+  ContextBackup->SeccompTrapRIP = ThreadObject->SeccompTrapRIP;
+  ThreadObject->SeccompTrapRIP = 0;
 
   auto Frame = Thread->CurrentFrame;
 
