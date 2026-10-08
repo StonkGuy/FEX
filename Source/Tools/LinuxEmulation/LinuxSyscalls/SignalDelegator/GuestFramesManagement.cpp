@@ -604,6 +604,15 @@ uint64_t SignalDelegator::SetupFrame_x64(FEXCore::Core::InternalThreadState* Thr
   guest_uctx->uc_stack.ss_sp = GuestStack->ss_sp;
   guest_uctx->uc_stack.ss_size = GuestStack->ss_size;
 
+  // Linux's setup_rt_frame stores sigmask_to_save() in frame->uc.uc_sigmask (signal_64.c:166,190), and whichever sigset_t
+  // the handler leaves there is what rt_sigreturn installs (signal_64.c:256 -> set_current_blocked). ContextBackup holds
+  // the guest-visible mask of the interrupted code, saved on handler entry before it was widened for the handler: this is
+  // exactly sigmask_to_save(). FEX previously left this field as whatever the zeroed stack happened to contain, so a
+  // handler (glibc, an unwinder, Wine) reading uc_sigmask saw an empty mask. The kernel only ever writes the low 64 bits;
+  // zero the rest so no uninitialised guest stack is exposed.
+  memset(guest_uctx->uc_sigmask.val, 0, sizeof(guest_uctx->uc_sigmask.val));
+  guest_uctx->uc_sigmask.val[0] = ContextBackup->GuestSignalMask;
+
   // Apparently RAX is always set to zero in case of badly misbehaving C applications and variadics.
   Frame->State.gregs[FEXCore::X86State::REG_RAX] = 0;
   Frame->State.gregs[FEXCore::X86State::REG_RDI] = Signal;
