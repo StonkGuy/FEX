@@ -419,7 +419,11 @@ uint64_t SignalDelegator::SetupFrame_x64(FEXCore::Core::InternalThreadState* Thr
   auto* xstate = reinterpret_cast<FEXCore::x86_64::xstate*>(FPStateLocation);
   SetXStateInfo(xstate, SupportsAVX);
 
-  guest_uctx->uc_mcontext.gregs[FEXCore::x86_64::FEX_REG_RIP] = ContextBackup->OriginalRIP;
+  // A seccomp trap is reported at the instruction after the syscall rather than at OriginalRIP (the `syscall` itself):
+  // the handler is entered past the syscall, and the difference is what makes rt_sigreturn resume there. See
+  // SeccompEmulator and HandleDispatcherGuestSignal. Zero for every other signal.
+  guest_uctx->uc_mcontext.gregs[FEXCore::x86_64::FEX_REG_RIP] =
+    ContextBackup->SeccompTrapRIP ? ContextBackup->SeccompTrapRIP : ContextBackup->OriginalRIP;
   guest_uctx->uc_mcontext.gregs[FEXCore::x86_64::FEX_REG_EFL] = eflags;
   // This stores the CS/GS/FS selectors. It ALSO stores the SS selector in the top 16 bits...For some reason.
   // Despite the naming, the endianness is swapped from what you'd expect.
@@ -574,7 +578,8 @@ uint64_t SignalDelegator::SetupFrame_ia32(FEXCore::Core::InternalThreadState* Th
     guest_uctx->sc.err = ConvertSignalToError(ucontext, Signal, HostSigInfo);
   }
 
-  guest_uctx->sc.ip = ContextBackup->OriginalRIP;
+  // A seccomp trap reports the instruction after the syscall; see SetupFrame_x64.
+  guest_uctx->sc.ip = ContextBackup->SeccompTrapRIP ? ContextBackup->SeccompTrapRIP : ContextBackup->OriginalRIP;
   guest_uctx->sc.flags = eflags;
   guest_uctx->sc.sp_at_signal = 0;
 
@@ -710,7 +715,9 @@ uint64_t SignalDelegator::SetupRTFrame_ia32(FEXCore::Core::InternalThreadState* 
     guest_uctx->uc.uc_mcontext.gregs[FEXCore::x86::FEX_REG_ERR] = ConvertSignalToError(ucontext, Signal, HostSigInfo);
   }
 
-  guest_uctx->uc.uc_mcontext.gregs[FEXCore::x86::FEX_REG_EIP] = ContextBackup->OriginalRIP;
+  // A seccomp trap reports the instruction after the syscall; see SetupFrame_x64.
+  guest_uctx->uc.uc_mcontext.gregs[FEXCore::x86::FEX_REG_EIP] =
+    ContextBackup->SeccompTrapRIP ? ContextBackup->SeccompTrapRIP : ContextBackup->OriginalRIP;
   guest_uctx->uc.uc_mcontext.gregs[FEXCore::x86::FEX_REG_EFL] = eflags;
   guest_uctx->uc.uc_mcontext.gregs[FEXCore::x86::FEX_REG_UESP] = Frame->State.gregs[FEXCore::X86State::REG_RSP];
   guest_uctx->uc.uc_mcontext.cr2 = 0;
