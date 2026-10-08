@@ -90,6 +90,14 @@ struct ThreadStateObject : public FEXCore::Allocator::FEXAllocOperators {
   uint32_t SeccompMode {SECCOMP_MODE_DISABLED};
   fextl::vector<FEX::HLE::SeccompFilterInfo*> Filters {};
 
+  // Set to the address just past the syscall instruction when a SECCOMP_RET_TRAP has been queued for that syscall,
+  // zero otherwise. The next guest signal frame is entered with this address in its ucontext, the way Linux reports a
+  // seccomp trap for the instruction following the syscall. It is consumed by HandleDispatcherGuestSignal and
+  // deliberately differs from the CpuStateFrame's RIP at trap time (the syscall instruction itself), which is what
+  // makes rt_sigreturn take the path that restores the guest handler's registers. See the SECCOMP_RET_TRAP handling
+  // in SeccompEmulator for the Linux semantics this reproduces.
+  uint64_t SeccompTrapRIP {};
+
   // personality emulation.
   uint32_t persona {};
 

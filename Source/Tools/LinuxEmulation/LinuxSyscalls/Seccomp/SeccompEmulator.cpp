@@ -325,6 +325,14 @@ SeccompEmulator::ExecuteFilter(FEXCore::Core::CpuStateFrame* Frame, uint64_t JIT
   auto Thread = FEX::HLE::ThreadManager::GetStateObjectFromCPUState(Frame);
   const uint64_t RIP = Thread->Thread->CTX->RestoreRIPFromHostPC(Frame->Thread, JITPC);
 
+  // Linux reports a seccomp trap for the instruction *after* the syscall: a SECCOMP_RET_TRAP handler is entered with
+  // RIP and si_call_addr just past the `syscall` (or `int 0x80`), and rt_sigreturn resumes the guest there with the
+  // value the handler left in the return register. That address is where the syscall would have resumed had the
+  // filter allowed it, and the dispatcher advances the guest RIP to it (Syscalls.cpp) once the filter has run, so
+  // reconstruct it here rather than reporting the address of the `syscall` itself. Both forms are two bytes:
+  // `syscall` is `0f 05`, `int 0x80` is `cd 80`.
+  const uint64_t PostSyscallRIP = RIP + 2;
+
   const auto Arch = Is64BitMode() ? AUDIT_ARCH_X86_64 : AUDIT_ARCH_I386;
   bool ShouldLog {};
   uint32_t SeccompResult {};
@@ -435,9 +443,15 @@ SeccompEmulator::ExecuteFilter(FEXCore::Core::CpuStateFrame* Frame, uint64_t JIT
       .si_code = 1, // SYS_SECCOMP
     };
 
-    Info.si_call_addr = reinterpret_cast<void*>(RIP);
+    // Report the address just past the syscall, matching Linux (see PostSyscallRIP above). Record it in the thread so
+    // the guest signal frame is entered with it: the CpuStateFrame still holds the address of the `syscall` itself
+    // here (the dispatcher advances it after the filter has run), and entering the handler at the syscall address
+    // would make rt_sigreturn re-execute the trapped syscall with the handler's return value discarded.
+    Info.si_call_addr = reinterpret_cast<void*>(PostSyscallRIP);
     Info.si_syscall = Args->Argument[0];
     Info.si_arch = Arch;
+
+    Thread->SeccompTrapRIP = PostSyscallRIP;
 
     SignalDelegation->QueueSignal(::getpid(), ::gettid(), SIGSYS, &Info, true);
     break;
