@@ -253,6 +253,10 @@ ThreadManager::CreateThread(const FEXCore::Core::CPUState* NewThreadState, uint6
   if (InheritThread) {
     FEX::HLE::_SyscallHandler->SeccompEmulator.InheritSeccompFilters(InheritThread, ThreadStateObject);
     ThreadStateObject->persona = InheritThread->persona;
+    // arch_prctl(ARCH_SET_CPUID, 0) is a per-thread flag; a real kernel inherits it across fork and clone
+    // (TIF_NOCPUID survives arch_dup_task_struct/copy_thread). A clone'd thread must not silently re-enable
+    // CPUID when its parent disabled it.
+    Frame->CPUIDFault = InheritThread->Thread->CurrentFrame->CPUIDFault;
   } else {
     ThreadStateObject->persona = ::personality(0xffffffff);
   }
