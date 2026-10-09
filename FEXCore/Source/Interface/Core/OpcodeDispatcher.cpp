@@ -5230,5 +5230,16 @@ void OpDispatchBuilder::NoExecOp(OpcodeArgs) {
               });
 }
 
+void OpDispatchBuilder::UnmappedOp(OpcodeArgs) {
+  // The address is not mapped in the guest view at all: the x86 page-fault error code has no PF_PROT and
+  // si_code is SEGV_MAPERR, unlike a mapped-but-not-executable fetch.
+  BreakOp(Op, FEXCore::IR::BreakDefinition {
+                .ErrorRegister = X86State::X86_PF_USER | X86State::X86_PF_INSTR,
+                .Signal = Core::FAULT_SIGSEGV,
+                .TrapNumber = X86State::X86_TRAPNO_PF,
+                .si_code = 1, // SEGV_MAPERR
+              });
+}
+
 #undef OpcodeArgs
 } // namespace FEXCore::IR

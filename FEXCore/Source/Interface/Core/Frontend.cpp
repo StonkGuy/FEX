@@ -107,6 +107,7 @@ bool Decoder::CheckRangeExecutable(uint64_t Address, uint64_t Size) {
     ExecutableRangeWritable = RangeInfo.Writable;
 
     if (RangeInfo.Size == 0) {
+      HitUnmappedFetch = !RangeInfo.Mapped;
       return false;
     }
 
@@ -1083,6 +1084,7 @@ void Decoder::DecodeREXIfValid(int8_t ExpectedOffset) {
 Decoder::DecodedBlockStatus Decoder::DecodeInstruction(uint64_t PC) {
   // Will be set if DecodeInstructionImpl tries to read non-executable memory
   HitNonExecutableRange = false;
+  HitUnmappedFetch = false;
   HitBadRelocation = false;
   auto ErrorDuringDecoding = DecodeInstructionImpl(PC);
 
@@ -1096,7 +1098,10 @@ Decoder::DecodedBlockStatus Decoder::DecodeInstruction(uint64_t PC) {
     // A decode error can be caused by substituting zero for an inaccessible
     // instruction byte, so the instruction fetch fault takes priority.
     if (HitNonExecutableRange) {
-      return InstSize ? DecodedBlockStatus::PARTIAL_DECODE_INST : DecodedBlockStatus::NOEXEC_INST;
+      if (InstSize) {
+        return DecodedBlockStatus::PARTIAL_DECODE_INST;
+      }
+      return HitUnmappedFetch ? DecodedBlockStatus::UNMAPPED_INST : DecodedBlockStatus::NOEXEC_INST;
     }
 
     if (HitBadRelocation) {
@@ -1658,6 +1663,7 @@ void Decoder::DecodeLoop(const uint8_t* _InstStream, uint64_t GuestSizePause) {
           LogMan::Msg::EFmt("{} instruction in entry block: {:X}",
                             BlockIt->BlockStatus == DecodedBlockStatus::INVALID_INST       ? "Invalid" :
                             BlockIt->BlockStatus == DecodedBlockStatus::NOEXEC_INST        ? "NoExec" :
+                            BlockIt->BlockStatus == DecodedBlockStatus::UNMAPPED_INST      ? "Unmapped" :
                             BlockIt->BlockStatus == DecodedBlockStatus::BAD_RELOCATION     ? "BadRelocation" :
                             BlockIt->BlockStatus == DecodedBlockStatus::UNIMPLEMENTED_INST ? "Unimplemented" :
                                                                                              "PartialDecode",

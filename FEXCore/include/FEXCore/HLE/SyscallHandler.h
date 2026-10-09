@@ -21,6 +21,9 @@ struct ExecutableRangeInfo {
   uint64_t Base;
   uint64_t Size;
   bool Writable;
+  // True when the guest has the address mapped (but not executable); false when it is unmapped in the guest view.
+  // Defaults true: only the Linux VMA query distinguishes unmapped from mapped-noexec.
+  bool Mapped {true};
 };
 
 class SyscallHandler;

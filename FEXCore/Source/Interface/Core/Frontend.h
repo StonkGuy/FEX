@@ -27,6 +27,7 @@ public:
     SUCCESS,
     INVALID_INST,
     NOEXEC_INST,
+    UNMAPPED_INST,
     PARTIAL_DECODE_INST,
     BAD_RELOCATION,
     UNIMPLEMENTED_INST,
@@ -154,6 +155,9 @@ private:
   uint64_t ExecutableRangeEnd {};
   bool ExecutableRangeWritable {};
   bool HitNonExecutableRange {};
+  // True when the last failing executable-range query reported the address as unmapped in the guest view
+  // (no VMA), rather than mapped without execute permission.
+  bool HitUnmappedFetch {};
   bool HitBadRelocation {};
 
   struct DecodeStream {

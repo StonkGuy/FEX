@@ -21,7 +21,7 @@ public:
   }
 
   FEXCore::HLE::ExecutableRangeInfo QueryGuestExecutableRange(FEXCore::Core::InternalThreadState* Thread, uint64_t Address) override {
-    return {0, UINT64_MAX, true};
+    return {0, UINT64_MAX, true, true};
   }
 };
 
