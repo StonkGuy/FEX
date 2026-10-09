@@ -176,6 +176,7 @@ ArchHelpers::Context::ContextBackup* SignalDelegator::StoreThreadState(FEXCore::
   Context->ClearedSyscallInfo = 0;
   Context->GuestSignalMask = 0;
   Context->SeccompTrapRIP = 0;
+  Context->SavedJITStackSP = 0;
 
   // Store fault to top status and then reset it
   Context->FaultToTopAndGeneratedException = Thread->CurrentFrame->SynchronousFaultData.FaultToTopAndGeneratedException;
@@ -290,6 +291,8 @@ void SignalDelegator::RestoreThreadState(FEXCore::Core::InternalThreadState* Thr
     }
   }
 
+  FEX::HLE::ThreadManager::GetStateObjectFromFEXCoreThread(Thread)->JITStackSP = Context->SavedJITStackSP;
+
   // Reset the guest state
   memcpy(&Thread->CurrentFrame->State, &Context->GuestState, sizeof(FEXCore::Core::CPUState));
 
@@ -329,6 +332,7 @@ bool SignalDelegator::HandleDispatcherGuestSignal(FEXCore::Core::InternalThreadS
   // the syscall (discarding the handler's return value). See SeccompEmulator for the kernel semantics.
   ContextBackup->SeccompTrapRIP = ThreadObject->SeccompTrapRIP;
   ThreadObject->SeccompTrapRIP = 0;
+  ContextBackup->SavedJITStackSP = ThreadObject->JITStackSP;
 
   auto Frame = Thread->CurrentFrame;
 
@@ -366,6 +370,9 @@ bool SignalDelegator::HandleDispatcherGuestSignal(FEXCore::Core::InternalThreadS
     ContextBackup->InSyscallInfo = Thread->CurrentFrame->InSyscallInfo;
     Thread->CurrentFrame->InSyscallInfo = 0;
   } else {
+    // The guest handler runs below the interrupted C++ frames; that is the stack level the guest runs at until it returns.
+    ThreadObject->JITStackSP = ArchHelpers::Context::GetSp(ucontext);
+
     // Interrupted outside of JIT code, typically in the C++ half of a syscall handler, where InSyscallInfo still says that all
     // registers are spilled. The guest handler is going to run JIT code with live registers, so it must not inherit that: an SMC
     // fault or a nested signal before the handler's own first syscall would skip spilling every register (the spill mask is

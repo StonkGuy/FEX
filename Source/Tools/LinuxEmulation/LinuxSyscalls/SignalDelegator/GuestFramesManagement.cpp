@@ -177,6 +177,13 @@ void SignalDelegator::RestoreFrame_x64(FEXCore::Core::InternalThreadState* Threa
 
     // Hack! Go back to the top of the dispatcher top
     // This is only safe inside the JIT rather than anything outside of it
+    // RestoreContext put back the host stack pointer of the interrupted code. When that was the C++ half of a syscall
+    // handler (a seccomp trap is raised from inside it), its frames are abandoned here, not resumed, so the dispatcher
+    // goes back to the stack level the interrupted guest code was running at: otherwise every such sigreturn leaks them
+    // and the host stack overflows after a few thousand signals.
+    if (!(Context->Flags & ArchHelpers::Context::ContextFlags::CONTEXT_FLAG_INJIT)) {
+      ArchHelpers::Context::SetSp(ucontext, Context->SavedJITStackSP ? Context->SavedJITStackSP : Frame->ReturningStackLocation);
+    }
     ArchHelpers::Context::SetPc(ucontext, Config.AbsoluteLoopTopAddressFillSRA);
     ArchHelpers::Context::SetFillSRASingleInst(ucontext, false);
     // Set our state register to point to our guest thread data
@@ -254,6 +261,13 @@ void SignalDelegator::RestoreFrame_ia32(FEXCore::Core::InternalThreadState* Thre
 
     // Hack! Go back to the top of the dispatcher top
     // This is only safe inside the JIT rather than anything outside of it
+    // RestoreContext put back the host stack pointer of the interrupted code. When that was the C++ half of a syscall
+    // handler (a seccomp trap is raised from inside it), its frames are abandoned here, not resumed, so the dispatcher
+    // goes back to the stack level the interrupted guest code was running at: otherwise every such sigreturn leaks them
+    // and the host stack overflows after a few thousand signals.
+    if (!(Context->Flags & ArchHelpers::Context::ContextFlags::CONTEXT_FLAG_INJIT)) {
+      ArchHelpers::Context::SetSp(ucontext, Context->SavedJITStackSP ? Context->SavedJITStackSP : Frame->ReturningStackLocation);
+    }
     ArchHelpers::Context::SetPc(ucontext, Config.AbsoluteLoopTopAddressFillSRA);
     ArchHelpers::Context::SetFillSRASingleInst(ucontext, false);
     // Set our state register to point to our guest thread data
@@ -333,6 +347,13 @@ void SignalDelegator::RestoreRTFrame_ia32(FEXCore::Core::InternalThreadState* Th
 
     // Hack! Go back to the top of the dispatcher top
     // This is only safe inside the JIT rather than anything outside of it
+    // RestoreContext put back the host stack pointer of the interrupted code. When that was the C++ half of a syscall
+    // handler (a seccomp trap is raised from inside it), its frames are abandoned here, not resumed, so the dispatcher
+    // goes back to the stack level the interrupted guest code was running at: otherwise every such sigreturn leaks them
+    // and the host stack overflows after a few thousand signals.
+    if (!(Context->Flags & ArchHelpers::Context::ContextFlags::CONTEXT_FLAG_INJIT)) {
+      ArchHelpers::Context::SetSp(ucontext, Context->SavedJITStackSP ? Context->SavedJITStackSP : Frame->ReturningStackLocation);
+    }
     ArchHelpers::Context::SetPc(ucontext, Config.AbsoluteLoopTopAddressFillSRA);
     ArchHelpers::Context::SetFillSRASingleInst(ucontext, false);
     // Set our state register to point to our guest thread data

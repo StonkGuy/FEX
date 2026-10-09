@@ -45,6 +45,7 @@ struct X86ContextBackup {
   bool FaultToTopAndGeneratedException;
   uint64_t GuestSignalMask; ///< guest-visible signal mask at the time the guest handler was entered (restored at rt_sigreturn)
   uint64_t SeccompTrapRIP; ///< non-zero when this frame is a SECCOMP_RET_TRAP SIGSYS: the RIP to enter the handler at (past the syscall)
+  uint64_t SavedJITStackSP; ///< host stack level the interrupted guest code ran at (0: the dispatcher's), restored at rt_sigreturn
 
   // Guest state
   int Signal;
@@ -75,6 +76,7 @@ struct ArmContextBackup {
   bool FaultToTopAndGeneratedException;
   uint64_t GuestSignalMask; ///< guest-visible signal mask at the time the guest handler was entered (restored at rt_sigreturn)
   uint64_t SeccompTrapRIP; ///< non-zero when this frame is a SECCOMP_RET_TRAP SIGSYS: the RIP to enter the handler at (past the syscall)
+  uint64_t SavedJITStackSP; ///< host stack level the interrupted guest code ran at (0: the dispatcher's), restored at rt_sigreturn
 
   // Guest state
   int Signal;
