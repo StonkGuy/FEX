@@ -8,6 +8,7 @@
 #include <FEXCore/Core/Context.h>
 #include <FEXCore/Config/Config.h>
 #include <FEXCore/Utils/File.h>
+#include <FEXCore/Utils/SignalScopeGuards.h>
 #include <FEXCore/Utils/WorkQueueThread.h>
 #include <FEXCore/fextl/memory.h>
 #include <FEXCore/fextl/string.h>
@@ -221,14 +222,46 @@ namespace DiskCache {
     fextl::vector<fextl::unique_ptr<IndexedDB>> ROCacheDBs;
     fextl::unique_ptr<IndexedDB> RWCacheDB;
     Index Index;
-    std::mutex IndexLock;
+    ForkableUniqueMutex IndexLock;
     bool FoundMetadata = false;
     struct CacheStoreWorkItem;
 
     struct PruneMemoryLRUWorkItem;
     std::atomic<uint64_t> MemoryLRUCurrentSize {};
-    std::mutex MemoryLRULock;
+    ForkableUniqueMutex MemoryLRULock;
     fextl::list<MemoryLRUKey> MemoryLRU;
+
+  public:
+    // Fork protocol. FEX forks via a raw host clone that drops every thread but the caller, so any
+    // mutex held by the Writer thread at the clone instant is inherited by the child locked, owner
+    // gone, and the child blocks forever on its next Lookup/Store. The generic fork hooks in
+    // ContextImpl quiesce these two mutexes across the clone: held (both, see the ordering note)
+    // before, reset in the child, released in the parent.
+    void LockBeforeFork() {
+      // The Writer takes MemoryLRU then Index (CacheStoreWorkItem::Run); the prune path takes them
+      // in the opposite order, so no fixed order is safe against both. Try-lock until we hold both;
+      // the critical sections are short, so this spins only briefly.
+      while (true) {
+        if (MemoryLRULock.try_lock()) {
+          if (IndexLock.try_lock()) {
+            return;
+          }
+          MemoryLRULock.unlock();
+        }
+        std::this_thread::yield();
+      }
+    }
+    void UnlockAfterFork(bool Child) {
+      if (Child) {
+        IndexLock.StealAndDropActiveLocks();
+        MemoryLRULock.StealAndDropActiveLocks();
+      } else {
+        IndexLock.unlock();
+        MemoryLRULock.unlock();
+      }
+    }
+
+  private:
 
     // the Writer holds references to all this stuff above and needs to be last
     fextl::unique_ptr<WorkQueueThread> Writer;
