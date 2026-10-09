@@ -212,13 +212,14 @@ ThreadManager::CreateThread(const FEXCore::Core::CPUState* NewThreadState, uint6
   ThreadStateObject->Thread->FrontendPtr = ThreadStateObject;
 
   {
-    // The sampling profiler (FEX_PROFILESAMPLEHZ) only starts in the process that grows past ~100 guest threads, i.e.
-    // the application itself: a Steam/Wine session runs hundreds of FEX processes and perturbing all of them is useless.
+    // The sampling profiler (FEX_PROFILESAMPLEHZ) only starts in the process that reaches FEX_PROFILESAMPLEMINTHREADS (100)
+    // guest threads, i.e. the application itself: a Steam/Wine session runs hundreds of FEX processes and perturbing all of them is useless.
     static std::atomic<uint32_t> ThreadCount {0};
     FEX_CONFIG_OPT(ProfileSampleHz, PROFILESAMPLEHZ);
     FEX_CONFIG_OPT(ProfileSampleAllThreads, PROFILESAMPLEALLTHREADS);
-    if (ProfileSampleHz() && ThreadCount.fetch_add(1) + 1 == 100) {
-      StartSamplingProfiler(SignalDelegation, ProfileSampleHz(), ProfileSampleAllThreads());
+    FEX_CONFIG_OPT(ProfileSampleMinThreads, PROFILESAMPLEMINTHREADS);
+    if (ProfileSampleHz() && ThreadCount.fetch_add(1) + 1 == std::max<uint32_t>(ProfileSampleMinThreads(), 1)) {
+      StartSamplingProfiler(SignalDelegation, ProfileSampleHz(), ProfileSampleAllThreads(), ProfileSampleMinThreads() == 0);
     }
   }
   if (ProfileStats()) {
