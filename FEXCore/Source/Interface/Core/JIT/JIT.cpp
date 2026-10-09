@@ -862,6 +862,7 @@ CPUBackend::CompiledCode Arm64JITCore::EmitJITCode(uint64_t Entry, uint64_t Size
   this->DebugData = DebugData;
   this->IR = IR;
   RequiresFarARM64Jumps = false;
+  CompilingWithTF = CheckTF;
   SSANodeMultiplier = 24;
 
   // Prepare restart via long jump in case branch encoding fails.

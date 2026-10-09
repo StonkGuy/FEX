@@ -164,7 +164,8 @@ void OpDispatchBuilder::IRETOp(OpcodeArgs) {
     StoreGPRRegister(X86State::REG_RSP, SP);
   }
 
-  ExitFunction(NewRIP);
+  // IRETQ may load TF: check it on the way out like POPF, so the trap is raised on the target (see BranchOps).
+  ExitFunction(NewRIP, BranchHint::CheckTF);
   BlockSetRIP = true;
 }
 
