@@ -306,6 +306,7 @@ public:
 
   void RegisterTLSState(FEX::HLE::ThreadStateObject* Thread);
   void UninstallTLSState(FEX::HLE::ThreadStateObject* Thread);
+  void ReleaseDeferredTLSState(FEX::HLE::ThreadStateObject* Thread);
 
   SourcecodeResolver* GetSourcecodeResolver() override {
     return this;

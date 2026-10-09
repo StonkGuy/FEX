@@ -1045,6 +1045,10 @@ void SyscallHandler::UninstallTLSState(FEX::HLE::ThreadStateObject* Thread) {
   FEX::HLE::ThreadManager::SetCurrentThreadObject(nullptr);
 }
 
+void SyscallHandler::ReleaseDeferredTLSState(FEX::HLE::ThreadStateObject* Thread) {
+  SignalDelegation->ReleaseDeferredTLSState(Thread);
+}
+
 static bool isHEX(char c) {
   return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
 }

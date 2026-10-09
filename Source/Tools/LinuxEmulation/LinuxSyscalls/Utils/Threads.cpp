@@ -347,6 +347,8 @@ namespace PThreads {
     Thread->detach();
 
     if (LongJumpExit) {
+      // Back on this thread's own stack: release the signal alt stack the exit had to keep because it ran on it.
+      FEX::HLE::_SyscallHandler->ReleaseDeferredTLSState(ThreadObject);
       // We have ownership of the thread object. Make sure to clean it up to prevent memory leaks.
       FEX::HLE::_SyscallHandler->TM.DestroyThread(ThreadObject, true);
       if (Status == 0) {

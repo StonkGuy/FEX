@@ -62,6 +62,9 @@ public:
 
   void RegisterTLSState(FEX::HLE::ThreadStateObject* Thread);
   void UninstallTLSState(FEX::HLE::ThreadStateObject* Thread);
+  // Releases an alt stack UninstallTLSState had to keep because the thread was running on it.
+  void ReleaseDeferredTLSState(FEX::HLE::ThreadStateObject* Thread);
+  void ReleaseAltStack(FEX::HLE::ThreadStateObject* Thread);
 
   /**
    * @brief Registers a signal handler for the host to handle a signal
