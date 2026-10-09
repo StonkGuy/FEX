@@ -583,6 +583,16 @@
           "Use with LibraryJITNaming to attribute samples to guest libraries. 0 disables."
         ]
       },
+      "ProfileSampleMinThreads": {
+        "Type": "uint32",
+        "Default": "100",
+        "AffectsCodeGen": "false",
+        "Desc": [
+          "ProfileSampleHz starts the sampler in the process that reaches this many guest threads (default 100: the application,",
+          "not the hundreds of helper processes of a Steam/Wine session). 1 samples every process from its first thread.",
+          "0: no sampler thread; each SIGPROF sent from outside stores a snapshot record of the receiving thread (ring in fex-<pid>-snap)."
+        ]
+      },
       "ProfileSampleAllThreads": {
         "Type": "bool",
         "Default": "false",
