@@ -4,6 +4,7 @@
 #include "LinuxSyscalls/PtraceEmu.h"
 #include "ArchHelpers/MContext.h"
 
+#include <FEXCore/Core/Context.h>
 #include <FEXCore/Core/CoreState.h>
 #include <FEXCore/Core/X86Enums.h>
 #include <FEXCore/Debug/InternalThreadState.h>
@@ -50,6 +51,29 @@ namespace {
   SnapRecord* Snaps = nullptr;
   std::atomic<uint32_t> SnapCount {0};
   std::atomic<bool> SnapMode {false};
+  // External mode (FEX_PROFILESAMPLEMINTHREADS=0): no sampler thread at all; every SIGPROF sent from outside (kill -PROF <pid>)
+  // stores one snapshot record of the receiving thread into a ring in /dev/shm/fex-<pid>-snap. For processes that must not
+  // grow an extra thread. FutexAddr holds the interrupted host SP, FutexExpected the sequence number.
+  bool ExternalMode = false;
+  FEX::HLE::SignalDelegator* Delegator = nullptr;
+  std::atomic<bool> ExternalOpen {false};
+
+  void OpenExternalSnaps() {
+    if (ExternalOpen.exchange(true)) {
+      return;
+    }
+    char Path[64];
+    snprintf(Path, sizeof(Path), "/dev/shm/fex-%d-snap", static_cast<int>(getpid()));
+    const int fd = open(Path, O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+    if (fd < 0 || ftruncate(fd, sizeof(SnapRecord) * MaxSnaps) != 0) {
+      return;
+    }
+    void* Map = mmap(nullptr, sizeof(SnapRecord) * MaxSnaps, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    close(fd);
+    if (Map != MAP_FAILED) {
+      Snaps = static_cast<SnapRecord*>(Map);
+    }
+  }
 
   // Threads worth sampling in "all threads" mode: the busy-prone ones. A process has hundreds of mostly idle threads
   // (Unity workers, thread pools); signalling all of them at the sampling rate would perturb what is measured. Samples
@@ -174,15 +198,24 @@ namespace {
   }
 } // namespace
 
-void StartSamplingProfiler(FEX::HLE::SignalDelegator* Signals, uint32_t Hz, bool AllThreads) {
+void StartSamplingProfiler(FEX::HLE::SignalDelegator* Signals, uint32_t Hz, bool AllThreads, bool External) {
   if (!Hz) {
     return;
   }
+  ExternalMode = External;
+  Delegator = Signals;
   Signals->RegisterHostSignalHandler(
     SIGPROF,
     [](FEXCore::Core::InternalThreadState* Thread, int, void*, void* UContext) {
-      if (SnapMode.load(std::memory_order_relaxed)) {
-        const uint32_t SIdx = SnapCount.fetch_add(1, std::memory_order_relaxed);
+      if (ExternalMode) {
+        OpenExternalSnaps();
+      }
+      if (ExternalMode || SnapMode.load(std::memory_order_relaxed)) {
+        uint32_t SIdx = SnapCount.fetch_add(1, std::memory_order_relaxed);
+        const uint32_t Seq = SIdx;
+        if (ExternalMode) {
+          SIdx %= MaxSnaps;
+        }
         if (Snaps && SIdx < MaxSnaps) {
           SnapRecord& R = Snaps[SIdx];
           R.Tid = static_cast<uint64_t>(syscall(SYS_gettid));
@@ -222,6 +255,23 @@ void StartSamplingProfiler(FEX::HLE::SignalDelegator* Signals, uint32_t Hz, bool
               }
             }
           }
+          if (ExternalMode) {
+            R.FutexWord = 0;
+            R.FutexExpected = Seq;
+            R.FutexAddr = ArchHelpers::Context::GetSp(UContext);
+            // Interrupted in translated code: the thread state is stale, take RIP and the statically allocated registers live.
+            if (Thread && Thread->CTX->IsAddressInCodeBuffer(Thread, R.HostPC)) {
+              R.FutexWord = 1;
+              R.Rip = Thread->CTX->RestoreRIPFromHostPC(Thread, R.HostPC);
+              const auto& Cfg = Delegator->GetConfig();
+              for (size_t i = 0; i < Cfg.SRAGPRCount && i < 16; ++i) {
+                R.Gregs[i] = ArchHelpers::Context::GetArmReg(UContext, Cfg.SRAGPRMapping[i]);
+              }
+              iovec Local {R.Stack, sizeof(R.Stack)};
+              iovec Remote {reinterpret_cast<void*>(R.Gregs[FEXCore::X86State::REG_RSP]), sizeof(R.Stack)};
+              process_vm_readv(getpid(), &Local, 1, &Remote, 1, 0);
+            }
+          }
         }
         return true;
       }
@@ -234,6 +284,9 @@ void StartSamplingProfiler(FEX::HLE::SignalDelegator* Signals, uint32_t Hz, bool
     },
     true);
 
+  if (External) {
+    return;
+  }
   pthread_t T;
   pthread_attr_t Attr;
   pthread_attr_init(&Attr);

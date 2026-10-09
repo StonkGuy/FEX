@@ -26,5 +26,5 @@ class SignalDelegator;
  * It exists because attaching a debugger or `perf` to a process that runs an anti-cheat is detected (and rightly so);
  * this runs entirely inside the emulator process.
  */
-void StartSamplingProfiler(FEX::HLE::SignalDelegator* Signals, uint32_t Hz, bool AllThreads);
+void StartSamplingProfiler(FEX::HLE::SignalDelegator* Signals, uint32_t Hz, bool AllThreads, bool External = false);
 } // namespace FEX::HLE
