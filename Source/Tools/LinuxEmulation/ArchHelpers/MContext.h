@@ -232,10 +232,13 @@ static inline uint32_t GetProtectFlags(void* ucontext) {
                      ESR1_EC_DataAbort, GetESRName(ESR));
 
   uint32_t ProtectFlags {};
-  if ((ESR & ESR1_DataAbort_Level) == ESR1_DataAbort_Level_EL0) {
-    // Always a user error for us.
-    ProtectFlags |= FEXCore::X86State::X86_PF_USER;
-  }
+
+  // A guest code memory access always faults at EL0, so PF_USER is always set: the kernel sets it for every
+  // user-mode page fault (bit 2 of the x86 error code, present in every reported value: 0x4 read, 0x6 write,
+  // 0x14/0x15 instruction fetch). The ESR walk-level field says which page-table level resolved, not which
+  // exception level the access came from, so it must not gate PF_USER: faults resolving at walk level 0-2
+  // (e.g. a fetch from an address in an unmapped huge gap) lost PF_USER and reported err=0x0.
+  ProtectFlags |= FEXCore::X86State::X86_PF_USER;
 
   if (ESR & ESR1_WNR) {
     // Fault was due to a write
