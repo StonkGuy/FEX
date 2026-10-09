@@ -1191,21 +1191,39 @@ void SignalDelegator::RegisterTLSState(FEX::HLE::ThreadStateObject* Thread) {
   }
 }
 
-void SignalDelegator::UninstallTLSState(FEX::HLE::ThreadStateObject* Thread) {
-  FEXCore::Allocator::munmap(Thread->SignalInfo.AltStackPtr, SIGSTKSZ * 16);
-
-  Thread->SignalInfo.AltStackPtr = nullptr;
-
+void SignalDelegator::ReleaseAltStack(FEX::HLE::ThreadStateObject* Thread) {
+  // Uninstall the alt stack before unmapping it, so a signal arriving in between is not delivered onto unmapped memory.
   stack_t altstack {};
   altstack.ss_flags = SS_DISABLE;
-
-  // Uninstall the alt stack
   const int Result = sigaltstack(&altstack, nullptr);
   if (Result == -1) {
     LogMan::Msg::EFmt("Failed to uninstall alternative signal stack {}", strerror(errno));
   }
 
+  FEXCore::Allocator::munmap(Thread->SignalInfo.AltStackPtr, SIGSTKSZ * 16);
+  Thread->SignalInfo.AltStackPtr = nullptr;
+  Thread->SignalInfo.AltStackReleaseDeferred = false;
+}
+
+void SignalDelegator::UninstallTLSState(FEX::HLE::ThreadStateObject* Thread) {
+  // A guest thread can leave from inside a signal handler that FEX runs on this alt stack: Wine terminates another
+  // thread with SIGQUIT, and when that thread is inside a trapped syscall its handler calls exit() right there. Unmapping
+  // the stack we are standing on faults on the next stack access and kills the process, so in that case keep it and
+  // release it once the thread is back on its own stack.
+  stack_t Current {};
+  if (sigaltstack(nullptr, &Current) == 0 && (Current.ss_flags & SS_ONSTACK)) {
+    Thread->SignalInfo.AltStackReleaseDeferred = true;
+  } else {
+    ReleaseAltStack(Thread);
+  }
+
   FEXCore::Allocator::UninstallTLSData(Thread->Thread);
+}
+
+void SignalDelegator::ReleaseDeferredTLSState(FEX::HLE::ThreadStateObject* Thread) {
+  if (Thread->SignalInfo.AltStackReleaseDeferred) {
+    ReleaseAltStack(Thread);
+  }
 }
 
 void SignalDelegator::FrontendRegisterHostSignalHandler(int Signal, bool Required) {
