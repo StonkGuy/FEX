@@ -82,6 +82,7 @@ private:
   // In the rare case when those assumptions are broken, FEX needs to safely restart the JIT.
   RestartOptions RestartControl {};
   bool RequiresFarARM64Jumps {};
+  bool CompilingWithTF {}; ///< the block being compiled is single-stepped (TF was set when it was compiled)
   // Default to 6 instructions per SSA node.
   uint32_t SSANodeMultiplier {24};
 
