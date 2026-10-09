@@ -195,6 +195,26 @@ DEF_OP(ExitFunction) {
     ARMEmitter::ForwardLabel SkipFullLookup;
     auto RipReg = GetReg(Op->NewRIP);
 
+    if (Op->Hint == IR::BranchHint::CheckTF || CompilingWithTF) {
+      // TF may be set: an instruction that loaded it (IRETQ), or a single-stepped block. The call-ret stack and the L1
+      // cache would jump straight into code compiled without the per-instruction TF check, so the trap would only be raised
+      // at the next dispatcher entry, instructions later. Go through the dispatcher, which compiles single-step blocks.
+      ARMEmitter::ForwardLabel TFUnset;
+      ldrb(TMP1, STATE_PTR(CpuStateFrame, State.flags[X86State::RFLAG_TF_RAW_LOC]));
+      (void)cbz(ARMEmitter::Size::i32Bit, TMP1, &TFUnset);
+      if (Op->Hint == IR::BranchHint::Return) {
+        // Keep the call-ret stack balanced: drop the entry this return would have used.
+        add(ARMEmitter::Size::i64Bit, REG_CALLRET_SP, REG_CALLRET_SP, 0x10);
+      } else if (Op->Hint == IR::BranchHint::Call) {
+        // An entry that never matches, so the matching return takes the full lookup.
+        stp<ARMEmitter::IndexType::PRE>(ARMEmitter::XReg::zr, ARMEmitter::XReg::zr, REG_CALLRET_SP, -0x10);
+      }
+      str(RipReg.X(), STATE, offsetof(FEXCore::Core::CpuStateFrame, State.rip));
+      ldr(TMP2, STATE, offsetof(FEXCore::Core::CpuStateFrame, Pointers.DispatcherLoopTop));
+      br(TMP2);
+      (void)Bind(&TFUnset);
+    }
+
     if (Op->Hint == IR::BranchHint::Return) {
       // First try to pop from the call-ret stack, otherwise follow the normal path (but ending in a ret)
       ldp<ARMEmitter::IndexType::POST>(TMP1, TMP2, REG_CALLRET_SP, 0x10);
