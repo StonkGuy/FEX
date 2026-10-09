@@ -69,6 +69,9 @@ struct ThreadStateObject : public FEXCore::Allocator::FEXAllocOperators {
     SignalDelegator* Delegator {};
 
     void* AltStackPtr {};
+    // Set when the thread left the guest (exit) while running on AltStackPtr: the stack could not be released under
+    // itself and is released once the thread is back on its own stack (ReleaseDeferredTLSState).
+    bool AltStackReleaseDeferred {};
     stack_t GuestAltStack {
       .ss_sp = nullptr,
       .ss_flags = SS_DISABLE, // By default the guest alt stack is disabled
