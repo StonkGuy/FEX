@@ -52,9 +52,16 @@ bool SyscallHandler::HandleSegfault(FEXCore::Core::InternalThreadState* Thread, 
   auto ThreadObject = FEX::HLE::ThreadManager::GetStateObjectFromFEXCoreThread(Thread);
   auto CallRetStackInfo = ThreadObject->GetCallRetStackInfo();
   if (FaultAddress >= CallRetStackInfo.AllocationBase && FaultAddress < CallRetStackInfo.AllocationEnd) {
-    // Reset REG_CALLRET_SP to the default location to allow for underflows/overflows
-    ArchHelpers::Context::SetArmReg(ucontext, 25, CallRetStackInfo.DefaultLocation);
-    return true;
+    // Only a push or pop through REG_CALLRET_SP (stp [x25, #-16]! / ldp [x25]) is a shadow-stack overflow or underflow. The
+    // guest can also read the guard pages itself: they are listed in its /proc/self/maps, and code that probes every mapped
+    // range (anti-tamper scanners do) touches them. Resetting x25 does not fix such an access, so it would fault again forever;
+    // it is an ordinary guest fault and must be delivered as one.
+    const uint64_t CallRetSP = ArchHelpers::Context::GetArmReg(ucontext, 25);
+    if (FaultAddress - (CallRetSP - 16) < 32) {
+      // Reset REG_CALLRET_SP to the default location to allow for underflows/overflows
+      ArchHelpers::Context::SetArmReg(ucontext, 25, CallRetStackInfo.DefaultLocation);
+      return true;
+    }
   }
 
   {
