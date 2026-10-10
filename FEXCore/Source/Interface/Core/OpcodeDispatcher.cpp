@@ -5213,11 +5213,12 @@ void OpDispatchBuilder::PermissionRestrictedOp(OpcodeArgs) {
 }
 
 void OpDispatchBuilder::InvalidOp(OpcodeArgs) {
+  // #UD as the Linux x86 trap path reports it: SIGILL, ILL_ILLOPN, trapno 6 (same as UnimplementedOp and UD2).
   BreakOp(Op, FEXCore::IR::BreakDefinition {
                 .ErrorRegister = 0,
                 .Signal = SIGILL,
-                .TrapNumber = 0,
-                .si_code = 0,
+                .TrapNumber = X86State::X86_TRAPNO_UD,
+                .si_code = 2, ///< ILL_ILLOPN
               });
 }
 
