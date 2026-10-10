@@ -136,6 +136,7 @@ uint8_t Decoder::ReadByte() {
 std::optional<uint8_t> Decoder::PeekByte(uint8_t Offset) {
   uint64_t ByteAddress = reinterpret_cast<uint64_t>(InstStream.InstStream + InstructionSize + Offset);
   if (CheckRangeExecutable(ByteAddress, 1)) {
+    ExaminedSize = std::max<uint8_t>(ExaminedSize, InstructionSize + Offset + 1);
     return InstStream.AdjustedInstStream[InstructionSize + Offset];
   } else {
     return std::nullopt;
@@ -151,6 +152,7 @@ std::pair<uint64_t, bool> Decoder::ReadData(uint8_t Size) {
   LastFieldReadSize = Size;
   if (CheckRangeExecutable(Address, Size)) {
     std::memcpy(&Res, &InstStream.AdjustedInstStream[InstructionSize], Size);
+    ExaminedSize = std::max<uint8_t>(ExaminedSize, InstructionSize + Size);
   } else {
     HitNonExecutableRange = true;
     // See PeekByte, this specific case may cause some executable memory to read as 0 but it doesn't matter as the entire instruction will be rolled back anyway.
@@ -848,6 +850,7 @@ Decoder::DecodedBlockStatus Decoder::NormalOpHeader(const FEXCore::X86Tables::X8
 
 Decoder::DecodedBlockStatus Decoder::DecodeInstructionImpl(uint64_t PC) {
   InstructionSize = 0;
+  ExaminedSize = 0;
   LastEscapePrefix = 0;
   Instruction.fill(0);
 
@@ -1092,6 +1095,9 @@ Decoder::DecodedBlockStatus Decoder::DecodeInstruction(uint64_t PC) {
     const auto InstSize = DecodeInst->InstSize;
     DecodeInst->TableInfo = nullptr;
     DecodeInst->InstSize = 0;
+    // The bytes that led to the rejection. The core validates these on SMC-checked pages, so that rewriting them
+    // into a different instruction re-translates instead of reusing this block.
+    DecodeInst->RejectedSize = std::min<uint8_t>(ExaminedSize, MAX_INST_SIZE);
 
     // A decode error can be caused by substituting zero for an inaccessible
     // instruction byte, so the instruction fetch fault takes priority.
