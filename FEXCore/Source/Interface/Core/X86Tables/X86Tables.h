@@ -241,6 +241,8 @@ struct DecodedInst {
   uint8_t SIB;
   uint8_t InstSize;
   int8_t REXIndex;
+  // For an instruction the decoder rejected (InstSize 0): how many leading bytes it fetched before rejecting it.
+  uint8_t RejectedSize;
 };
 
 union ModRMDecoded {

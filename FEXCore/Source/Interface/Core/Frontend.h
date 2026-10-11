@@ -183,6 +183,9 @@ private:
 
   static constexpr size_t MAX_INST_SIZE = 15;
   uint8_t InstructionSize {};
+  // Number of leading instruction bytes the decoder has successfully fetched (read or peeked) for the current
+  // instruction. Unlike InstructionSize it never counts bytes that were skipped or substituted.
+  uint8_t ExaminedSize {};
   // Contains the full decoded instruction, unless it is a `Thunk` instruction.
   std::array<uint8_t, MAX_INST_SIZE> Instruction;
   uint8_t LastEscapePrefix {};

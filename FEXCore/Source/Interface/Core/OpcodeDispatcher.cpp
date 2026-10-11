@@ -4878,6 +4878,17 @@ void OpDispatchBuilder::INTOp(OpcodeArgs) {
       }
     }
 
+    // Vectors 3 and 4 have user-callable gates on Linux: `int 3` (CD 03) is a #BP exactly like INT3, and `int 4` is #OF.
+    // Both report the address after the instruction. Every other vector is a #GP with the vector in the error code.
+    if (Literal == 3 || Literal == 4) {
+      Reason.ErrorRegister = 0;
+      Reason.Signal = Literal == 3 ? Core::FAULT_SIGTRAP : Core::FAULT_SIGSEGV;
+      Reason.TrapNumber = Literal == 3 ? X86State::X86_TRAPNO_BP : X86State::X86_TRAPNO_OF;
+      Reason.si_code = 0x80;
+      SetRIPToNext = true;
+      break;
+    }
+
     Reason.ErrorRegister = Literal << 3 | (0b010);
     Reason.Signal = Core::FAULT_SIGSEGV;
     // GP is raised when task-gate isn't setup to be valid
@@ -5213,11 +5224,12 @@ void OpDispatchBuilder::PermissionRestrictedOp(OpcodeArgs) {
 }
 
 void OpDispatchBuilder::InvalidOp(OpcodeArgs) {
+  // #UD as the Linux x86 trap path reports it: SIGILL, ILL_ILLOPN, trapno 6 (same as UnimplementedOp and UD2).
   BreakOp(Op, FEXCore::IR::BreakDefinition {
                 .ErrorRegister = 0,
                 .Signal = SIGILL,
-                .TrapNumber = 0,
-                .si_code = 0,
+                .TrapNumber = X86State::X86_TRAPNO_UD,
+                .si_code = 2, ///< ILL_ILLOPN
               });
 }
 
