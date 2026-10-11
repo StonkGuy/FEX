@@ -48,6 +48,7 @@ eac-tests/<name>/build.sh native [output]    # where supported: built with the h
 | `maps-probe` | Probes every inaccessible mapping listed in `/proc/self/maps` under a SIGSEGV handler: every probe returns, `si_addr` is the probed address. | 0023 |
 | `tf-iret` | Where the single-step trap lands after `POPFQ`, an `IRETQ` loading TF, Wine's `popfq; iretq`, and across cached call/ret code. | 0025 |
 | `proc-maps` | `/proc/self/maps` lists only x86-64 process mappings: everything below `TASK_SIZE_MAX` except `[vsyscall]`, every file-backed ELF mapping x86-64. | 0033 |
+| `smc-remote-write` | A code page the guest made RWX (and executed from again) can be written by another process with `process_vm_writev` (Wine's `NtWriteVirtualMemory`), and the new code runs. | 0035 |
 | `pop-fault` | A faulting `pop` to memory leaves RSP unchanged. Its patch (0021) is withdrawn, so it is **expected to fail** on this branch. | — |
 | `bench` | Not a pass/fail test: micro-benchmarks for code-churn invalidation (`EXTRA="-DINVAL_MODE=1 -DINVAL_THREADS=190"`) and the self-modifying-code modes; `tso_probe.c` is an ordinary Arm64 program printing the TSO `prctl` state. | 0002, 0004 |
 
@@ -58,6 +59,7 @@ Expected results (same binaries on all three):
 | `ptrace-inject` | PASS | hang (timeout) | PASS |
 | `signal-mask`, `signal-regs`, `signal-race`, `cpuid-fault`, `proc-status`, `ptrace-regsets`, `ptrace-dregs`, `signal-frame`, `sigreturn-eflags`, `tf-iret` | PASS | FAIL | PASS |
 | `proc-maps` | PASS (derived from the kernel source; native run pending) | FAIL | PASS |
+| `smc-remote-write` | PASS (derived from the kernel source; native run pending) | FAIL | PASS |
 | `seccomp-trap`, `seccomp-trap-noexec` | PASS | SIGSEGV | PASS |
 | `restart-syscall` | PASS | SIGILL | PASS |
 | `maps-probe` | PASS | hang (timeout) | PASS |
