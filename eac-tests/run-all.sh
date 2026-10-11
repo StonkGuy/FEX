@@ -32,6 +32,8 @@ signal-frame        signal_frame_test           PASS FEX_HOSTFEATURES=disableavx
 sigreturn-eflags    sigreturn_eflags_test       PASS -
 maps-probe          maps_probe_test             PASS -
 tf-iret             tf_iret_test                PASS -
+# fork-deadlock links glibc (gcc -static -pthread on x86-64 Linux, see its build.sh); build it separately and run
+# ./fork_deadlock_test under FEX with code caching on. It is a guard for 0029, not a reproducer.
 pop-fault           pop_fault_test              FAIL -
 '
 
