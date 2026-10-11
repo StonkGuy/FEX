@@ -817,7 +817,10 @@ static std::optional<uint64_t> ReadlinkTraceeExe(const char* Path, char* Buf, si
     return std::nullopt;
   }
   const size_t Len = std::min(BufSize, Exe->size());
-  memcpy(Buf, Exe->data(), Len);
+  if (FaultSafeUserMemAccess::CopyToUser(Buf, Exe->data(), Len)) {
+    errno = EFAULT;
+    return -1;
+  }
   return Len;
 }
 
@@ -828,9 +831,14 @@ uint64_t FileManager::Readlink(const char* pathname, char* buf, size_t bufsiz) {
   snprintf(PidSelfPath, 50, "/proc/%i/exe", CurrentPID);
 
   if (strcmp(pathname, "/proc/self/exe") == 0 || strcmp(pathname, "/proc/thread-self/exe") == 0 || strcmp(pathname, PidSelfPath) == 0) {
+    // Like Linux: copy the link text without a terminator, -EFAULT if the buffer is bad.
     const auto& App = Filename();
-    strncpy(buf, App.c_str(), bufsiz);
-    return std::min(bufsiz, App.size());
+    const size_t Len = std::min(bufsiz, App.size());
+    if (FaultSafeUserMemAccess::CopyToUser(buf, App.c_str(), Len)) {
+      errno = EFAULT;
+      return -1;
+    }
+    return Len;
   }
 
   if (auto Traced = ReadlinkTraceeExe(pathname, buf, bufsiz)) {
@@ -909,9 +917,14 @@ uint64_t FileManager::Readlinkat(int dirfd, const char* pathname, char* buf, siz
   snprintf(PidSelfPath, 50, "/proc/%i/exe", CurrentPID);
 
   if (Path == "/proc/self/exe" || Path == "/proc/thread-self/exe" || Path == PidSelfPath) {
+    // Like Linux: copy the link text without a terminator, -EFAULT if the buffer is bad.
     const auto& App = Filename();
-    strncpy(buf, App.c_str(), bufsiz);
-    return std::min(bufsiz, App.size());
+    const size_t Len = std::min(bufsiz, App.size());
+    if (FaultSafeUserMemAccess::CopyToUser(buf, App.c_str(), Len)) {
+      errno = EFAULT;
+      return -1;
+    }
+    return Len;
   }
 
   if (!Path.empty() && Path[0] == '/') {
