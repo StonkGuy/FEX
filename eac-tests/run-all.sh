@@ -24,6 +24,8 @@ cpuid-fault         cpuid_fault_test            PASS -
 proc-status         proc_status_test            PASS -
 proc-maps           proc_maps_test              PASS -
 smc-remote-write    smc_remote_write_test       PASS -
+smc-same-page       smc_same_page_test          PASS -
+smc-same-page       smc_same_page_test          PASS FEX_SMCHOTPAGEFAULTS=0
 ptrace-dregs        ptrace_dregs_test           PASS -
 ptrace-regsets      ptrace_regsets_test         PASS -
 restart-syscall     restart_syscall_test        PASS -
