@@ -70,7 +70,7 @@ See [eac-tests/README.md](eac-tests/README.md).
 
 **Found a bug, or a place where the patched FEX still behaves differently from x86-64 Linux?** Please report it here as
 an issue. If you have already fixed it in your own fork, please consider opening a pull request here too (with a test),
-so everyone gets the fix and the test suite covers it.
+so everyone gets the fix and the test suite covers it. FEX code changes go to [StonkGuy/FEX](https://github.com/StonkGuy/FEX) as a pull request against the current `eac-<release>` branch, with a test in its `eac-tests/`.
 
 This repository does not send patches to FEX-Emu or Proton itself and is not affiliated with them (steamac changes are
 discussed with its maintainer directly). If you have reviewed a patch and think it is good enough for upstream, **you
@@ -85,6 +85,6 @@ I will try to keep the patched components up to date with their upstream release
 every update, and to drop any patch once upstream covers its behaviour. For game-specific problems I will try to help
 where I can, but I cannot guarantee that every game, or every fix, will work.
 
-Each FEX release is handled the same way: rebase this branch onto it as `eac-<release>`, run `eac-tests` in the
-guest and natively for the oracle, check a live VRChat session, drop every patch whose behaviour upstream now
-provides, and tag the result.
+Each FEX release is handled the same way: rebase the patches onto it as branch `eac-<release>` of StonkGuy/FEX, run
+`eac-tests` in the guest and natively for the oracle, check a live VRChat session, drop every patch whose behaviour
+upstream now provides, and tag the result; the PoC and the steamac fork then pin the new tag.
