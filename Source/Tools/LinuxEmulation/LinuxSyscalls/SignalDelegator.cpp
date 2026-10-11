@@ -1001,6 +1001,26 @@ void SignalDelegator::QueueSignal(pid_t tgid, pid_t tid, int Signal, siginfo_t* 
   }
 }
 
+void SignalDelegator::PrepareForcedGuestSignal(FEX::HLE::ThreadStateObject* Thread, int Signal) {
+  const uint64_t SignalMask = 1ULL << (Signal - 1);
+  const bool Blocked = Thread->SignalInfo.CurrentSignalMask.Val & SignalMask;
+
+  GuestSigAction Action {};
+  RegisterGuestSignalHandler(Signal, nullptr, &Action);
+  const bool Ignored = Action.sigaction_handler.handler == SIG_IGN;
+
+  if (!Blocked && !Ignored) {
+    return;
+  }
+
+  // force_sig_info_to_task(): a forced signal that is blocked or ignored gets the default disposition and is unblocked.
+  Action.sigaction_handler.handler = SIG_DFL;
+  RegisterGuestSignalHandler(Signal, &Action, nullptr);
+  if (Blocked) {
+    GuestSigProcMask(Thread, SIG_UNBLOCK, &SignalMask, nullptr);
+  }
+}
+
 SignalDelegator::SignalDelegator(FEXCore::Context::Context* _CTX, const std::string_view ApplicationName, bool SupportsAVX, bool SupportsSVE256)
   : CTX {_CTX}
   , ApplicationName {ApplicationName}
