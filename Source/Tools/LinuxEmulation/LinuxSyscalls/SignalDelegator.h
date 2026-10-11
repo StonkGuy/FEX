@@ -109,6 +109,11 @@ public:
   void UninstallHostHandler(int Signal);
   void QueueSignal(pid_t tgid, pid_t tid, int Signal, siginfo_t* info, bool IgnoreMask);
 
+  // Prepare a signal that Linux forces on the current thread (force_sig_info_to_task() with HANDLER_CURRENT, e.g. the
+  // SIGSYS of a SECCOMP_RET_TRAP): when the guest blocks or ignores it, its disposition is reset to SIG_DFL and it is
+  // unblocked, so the default action is taken instead of the signal staying pending or being dropped.
+  void PrepareForcedGuestSignal(FEX::HLE::ThreadStateObject* Thread, int Signal);
+
   // Terminate this thread the way Linux's force_sigsegv does: force the SIGSEGV disposition to SIG_DFL, log the
   // offending address once, clean up, and die from SIGSEGV. Used when the guest signal frame cannot be written.
   [[noreturn]] void ForceGuestSigSegv(uint64_t BadSP);
