@@ -502,12 +502,38 @@ uint64_t SyscallHandler::GuestMprotect(FEXCore::Core::InternalThreadState* Threa
 
   {
     auto lk = FEXCore::GuardSignalDeferringSection(VMATracking.Mutex, Thread);
+
+    // Code pages the guest unlocks for patching (executable and not writable, made writable and executable: the
+    // VirtualProtect(PAGE_EXECUTE_READWRITE) a hook installer issues before it writes a jump) become SMC-hot. A
+    // write-protected code page only works for writes the guest makes itself, which fault into FEX; a write that
+    // arrives from another process (Wine's NtWriteVirtualMemory is wineserver's process_vm_writev, and so are
+    // debuggers and injectors) takes no fault and fails with EFAULT on the host's read-only page, although the guest
+    // made the page writable. Hot pages keep the protection the guest asked for and the JIT verifies their code
+    // instead; the invalidation below drops the code translated before, which had no such check.
+    fextl::vector<uint64_t> UnlockedCode;
+    constexpr uint64_t MaxUnlockedCodePages = 64;
+    const auto Base = reinterpret_cast<uint64_t>(addr) & FEXCore::Utils::FEX_PAGE_MASK;
+    const auto Top = FEXCore::AlignUp(reinterpret_cast<uint64_t>(addr) + len, FEXCore::Utils::FEX_PAGE_SIZE);
+    if (SMCChecks == FEXCore::Config::CONFIG_SMC_MTRACK && SMCHotPageFaults() && (prot & PROT_WRITE) && (prot & PROT_EXEC) &&
+        Top > Base && (Top - Base) / FEXCore::Utils::FEX_PAGE_SIZE <= MaxUnlockedCodePages) {
+      for (auto Page = Base; Page < Top; Page += FEXCore::Utils::FEX_PAGE_SIZE) {
+        auto Entry = VMATracking.FindVMAEntry(Page);
+        if (Entry != VMATracking.VMAs.end() && Entry->second.Prot.Executable && !Entry->second.Prot.Writable) {
+          UnlockedCode.push_back(Page);
+        }
+      }
+    }
+
     Result = ::mprotect(addr, len, prot);
     if (Result == -1) {
       return -errno;
     }
 
     TrackMprotect(Thread, addr, len, prot);
+
+    for (auto Page : UnlockedCode) {
+      SMCHotPages.MarkHot(Page);
+    }
   }
 
   InvalidateCodeRangeIfNecessary(Thread, reinterpret_cast<uint64_t>(addr), len, false);
