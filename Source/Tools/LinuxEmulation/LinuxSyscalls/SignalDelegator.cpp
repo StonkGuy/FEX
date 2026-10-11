@@ -264,9 +264,19 @@ void SignalDelegator::RestoreThreadState(FEXCore::Core::InternalThreadState* Thr
 
   // Restore host state
   ArchHelpers::Context::RestoreContext(ucontext, Context);
-  if (Context->Flags & ArchHelpers::Context::ContextFlags::CONTEXT_FLAG_SYSCALLINFO_CLEARED) {
-    // Back in the syscall handler the guest signal interrupted.
-    Thread->CurrentFrame->InSyscallInfo = Context->ClearedSyscallInfo;
+  if (Type != RestoreType::TYPE_PAUSE) {
+    // The interrupted code gets back the InSyscallInfo it had when the signal arrived. A guest rt_sigreturn is itself a
+    // syscall, so the dispatcher has just set InSyscallInfo to 0xFFFF (every register spilled) for it; left in place, the
+    // JIT code we return to would run with that stale value until its next syscall, and every SpillSRA in between (a
+    // nested signal, an SMC fault that re-executes the block) would skip all registers: the guest handler then sees
+    // stale registers, and the SMC path reloads them into the JIT.
+    if (Context->Flags & ArchHelpers::Context::ContextFlags::CONTEXT_FLAG_SYSCALLINFO_CLEARED) {
+      // Back in the syscall handler the guest signal interrupted.
+      Thread->CurrentFrame->InSyscallInfo = Context->ClearedSyscallInfo;
+    } else {
+      // JIT code (the value saved on delivery) or code that was not in a syscall (0).
+      Thread->CurrentFrame->InSyscallInfo = Context->InSyscallInfo;
+    }
   }
 
   {
