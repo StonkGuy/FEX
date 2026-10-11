@@ -44,6 +44,7 @@ eac-tests/<name>/build.sh native [output]    # where supported: built with the h
 | `munmap-4g` | x86-64 munmap across 4 GiB, with holes, at the 4 GiB boundary, MAP_32BIT reuse, overflowing lengths. | #5847 |
 | `ptrace-dregs` | Debug registers through `PTRACE_PEEKUSER`/`POKEUSER`, with the kernel's validation and error codes. | 0012 |
 | `proc-status` | `Seccomp:` and `TracerPid:` in `/proc/self/status`. Re-execs itself with `FEX_NEEDSSECCOMP=1`. | 0013 |
+| `sigtrace-unlink` | `FEX_SIGNALTRACE=1` ring `/dev/shm/fex-<pid>-sigtrace` exists while the process runs and is gone after a normal exit. Re-execs itself with the option. | 0007 |
 | `ptrace-regsets` | `PTRACE_GETREGSET`/`SETREGSET`: `NT_PRSTATUS`, `NT_X86_XSTATE`, `-EINVAL` for an unknown type. | 0014 |
 | `restart-syscall` | `restart_syscall` returns `-EINTR` and the process survives. | 0015 |
 | `signal-frame` | The signal frame against what Linux writes: TF single-step, CS/SS `0x33`/`0x2b`, the XSAVE fpstate trailer (run a second time with `FEX_HOSTFEATURES=disableavx` for the FXSAVE frame), `ud2` → `ILL_ILLOPN`, `uc_sigmask`, a frame that does not fit the stack. | 0016–0020 |
