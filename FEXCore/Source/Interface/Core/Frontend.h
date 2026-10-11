@@ -153,6 +153,8 @@ private:
   uint64_t ExecutableRangeBase {};
   uint64_t ExecutableRangeEnd {};
   bool ExecutableRangeWritable {};
+  // First guest address the current instruction's fetch could not read (0 if none): the x86 CR2 of a fetch fault.
+  uint64_t NonExecutableFetchAddress {};
   bool HitNonExecutableRange {};
   bool HitBadRelocation {};
 
