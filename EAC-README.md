@@ -44,6 +44,7 @@ One commit per patch, in order, on top of FEX-2610. The numbers are the PoC's pa
 | 0025 | `78adb13` | JIT: raise the single-step trap on the target of an IRETQ that loads TF, and never leave single-step mode through the lookup caches |
 | 0026 | `2169934` | Signals: keep the signal alt stack while a thread exits on it |
 | 0033 | `e8f2a2f` | proc: list only the emulated process's mappings in /proc/<pid>/maps |
+| 0035 | `3044753` | SMC: code pages the guest makes writable stay writable for other processes (based on yungtry's patch 0028) |
 
 Two more commits add [eac-tests/](eac-tests/) and this file; they touch nothing FEX builds.
 
