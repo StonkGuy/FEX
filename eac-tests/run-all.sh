@@ -32,6 +32,9 @@ signal-frame        signal_frame_test           PASS FEX_HOSTFEATURES=disableavx
 sigreturn-eflags    sigreturn_eflags_test       PASS -
 maps-probe          maps_probe_test             PASS -
 tf-iret             tf_iret_test                PASS -
+ud-regs             ud_regs_test                PASS -
+invalid-ops         invalid_ops_test            PASS -
+invalid-ops         invalid_ops_test            PASS FEX_SMCCHECKS=full
 pop-fault           pop_fault_test              FAIL -
 '
 
