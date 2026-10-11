@@ -454,6 +454,7 @@ void ContextImpl::DestroyThread(FEXCore::Core::InternalThreadState* Thread) {
 void ContextImpl::UnlockAfterFork(FEXCore::Core::InternalThreadState* LiveThread, bool Child) {
   Allocator::UnlockAfterFork(LiveThread, Child);
 
+  DiskCache.UnlockAfterFork(Child);
   Profiler::PostForkAction(Child);
   if (Child) {
     if (CodeMapWriter) {
@@ -475,6 +476,7 @@ void ContextImpl::UnlockAfterFork(FEXCore::Core::InternalThreadState* LiveThread
 void ContextImpl::LockBeforeFork(FEXCore::Core::InternalThreadState* Thread) {
   CodeInvalidationMutex.lock();
   Allocator::LockBeforeFork(Thread);
+  DiskCache.LockBeforeFork();
   if (Config.StrictInProcessSplitLocks) {
     FEXCore::Utils::SpinWaitLock::lock(&StrictSplitLockMutex);
   }
