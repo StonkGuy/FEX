@@ -53,6 +53,12 @@ public:
     return (New & CountMask) == FaultThreshold && MakeHot(Page);
   }
 
+  /// Declares the page containing `Address` hot without waiting for faults. Returns false when it already was hot or the
+  /// set is full (the page then stays on plain write protection).
+  bool MarkHot(uint64_t Address) {
+    return MakeHot(Address >> PageShift);
+  }
+
   /// True if the page containing `Address` is hot.
   bool IsHot(uint64_t Address) const {
     if (HotCount.load(std::memory_order_relaxed) == 0) {
