@@ -5,7 +5,11 @@ Branch `eac-2610` is **FEX-2610** ([`14c9268`](https://github.com/FEX-Emu/FEX/co
 signal, seccomp and `/proc` emulation where the anti-cheat launcher, Wine/Proton or a debugger observes it, and a few
 performance and diagnostic changes found on the way. FEX's own [README.md](README.md) is unchanged.
 
-Releases are tags on this branch: `eac-2610.1` is the first. The write-up — why each patch exists, how it was found,
+Tested titles: VRChat is verified in game (EAC `301`, online session); Mini Royale's EAC launcher also reaches `301`.
+Results differ from game to game — each title ships its own EAC build and checks — so an untested game may or may not
+work.
+
+Releases are tags on this branch (`eac-2610.1`, `eac-2610.2`); fixes merged after the latest tag ship in the next one. The write-up — why each patch exists, how it was found,
 results and limits — is in the proof of concept,
 [StonkGuy/eac-arm64-emulation-poc](https://github.com/StonkGuy/eac-arm64-emulation-poc)
 ([docs/patches.md](https://github.com/StonkGuy/eac-arm64-emulation-poc/blob/master/docs/patches.md)). This is a
