@@ -1130,6 +1130,7 @@ public:
 
   void InvalidOp(OpcodeArgs);
   void NoExecOp(OpcodeArgs);
+  void UnmappedOp(OpcodeArgs);
 
   void SetPackedRFLAG(bool Lower8, Ref Src);
   Ref GetPackedRFLAG(uint32_t FlagsMask = ~0U);

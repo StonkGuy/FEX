@@ -251,11 +251,16 @@ FEXCore::HLE::ExecutableRangeInfo SyscallHandler::QueryGuestExecutableRange(FEXC
   auto ThreadObject = FEX::HLE::ThreadManager::GetStateObjectFromFEXCoreThread(Thread);
 
   auto Entry = VMATracking.FindVMAEntry(Address);
-  if (Entry == VMATracking.VMAs.end() ||
+  if (Entry != VMATracking.VMAs.end() &&
       (!Entry->second.Prot.Executable && (!(ThreadObject->persona & READ_IMPLIES_EXEC) || !Entry->second.Prot.Readable))) {
-    return {0, 0, false};
+    // Mapped in the guest view but not executable: a protection fault on fetch.
+    return {0, 0, false, true};
   }
-  return {Entry->first, Entry->second.Length, Entry->second.Prot.Writable};
+  if (Entry == VMATracking.VMAs.end()) {
+    // Not mapped in the guest view: a fetch fault on a missing page, not a protection fault.
+    return {0, 0, false, false};
+  }
+  return {Entry->first, Entry->second.Length, Entry->second.Prot.Writable, true};
 }
 
 struct ReadELFHeadersResult {
