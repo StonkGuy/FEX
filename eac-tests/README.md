@@ -59,8 +59,8 @@ Expected results (same binaries on all three):
 |---|---|---|---|
 | `ptrace-inject` | PASS | hang (timeout) | PASS |
 | `signal-mask`, `signal-regs`, `signal-race`, `cpuid-fault`, `proc-status`, `ptrace-regsets`, `ptrace-dregs`, `signal-frame`, `sigreturn-eflags`, `tf-iret` | PASS | FAIL | PASS |
-| `proc-maps` | PASS (derived from the kernel source; native run pending) | FAIL | PASS |
-| `smc-remote-write` | PASS (derived from the kernel source; native run pending) | FAIL | PASS |
+| `proc-maps` | PASS (x86-64, kernel 6.19) | FAIL | PASS |
+| `smc-remote-write` | PASS (x86-64, kernel 6.19) | FAIL | PASS |
 | `seccomp-trap`, `seccomp-trap-noexec` | PASS | SIGSEGV | PASS |
 | `seccomp-trap-blocked` | PASS | not run | PASS (FAIL on `eac-2610.2`) |
 | `restart-syscall` | PASS | SIGILL | PASS |
