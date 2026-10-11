@@ -52,6 +52,9 @@ void RegisterFS(FEX::HLE::SyscallHandler* Handler) {
   });
 
   REGISTER_SYSCALL_IMPL(readlink, [](FEXCore::Core::CpuStateFrame* Frame, const char* pathname, char* buf, size_t bufsiz) -> uint64_t {
+    if (!FaultSafeUserMemAccess::IsStringReadable(pathname)) {
+      return -EFAULT;
+    }
     uint64_t Result = FEX::HLE::_SyscallHandler->FM.Readlink(pathname, buf, bufsiz);
     SYSCALL_ERRNO();
   });
