@@ -147,6 +147,11 @@ struct GuestToHostMap {
     BlockLinks->insert({{GuestDestination, HostLink}, delinker});
   }
 
+  bool HasBlockExecutableRange(uint64_t Page, const LookupCacheReadLockToken&) const {
+    auto it = CodePages.find(Page >> 12);
+    return it != CodePages.end() && !it->second.empty();
+  }
+
   bool AddBlockExecutableRange(const std::ranges::input_range auto& Addresses, uint64_t Start, uint64_t Length, const LookupCacheWriteLockToken&) {
     bool rv = false;
 
@@ -284,6 +289,13 @@ public:
   }
 
   GuestToHostMap* Shared = nullptr;
+
+  // Returns true if the page already holds translated code. SMC tracking write-protects a page before its first block
+  // is published with AddBlockExecutableRange, so a page that holds code is protected (or verified) already.
+  bool HasBlockExecutableRange(uint64_t Page) {
+    auto lk = Shared->AcquireReadLock();
+    return Shared->HasBlockExecutableRange(Page, lk);
+  }
 
   // Appends a list of Block {Address} to CodePages [Start, Start + Length)
   // Returns true if new pages are marked as containing code
