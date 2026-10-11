@@ -25,6 +25,8 @@ $end_info$
 
 #include <git_version.h>
 
+#include <cctype>
+#include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
 #include <filesystem>
@@ -610,6 +612,22 @@ EmulatedFDManager::EmulatedFDManager(FEXCore::Context::Context* ctx)
 
 EmulatedFDManager::~EmulatedFDManager() {}
 
+// "/proc/<pid>/maps" of any process, or "/proc/self/maps". Lookups use the path of the opened fd, so a
+// "/proc/self/maps" open arrives here in its "/proc/<pid>/maps" form.
+static bool IsProcMapsPath(const char* Path) {
+  if (strncmp(Path, "/proc/", 6) != 0) {
+    return false;
+  }
+  const char* P = Path + 6;
+  if (!isdigit(*P)) {
+    return strcmp(P, "self/maps") == 0;
+  }
+  while (isdigit(*P)) {
+    ++P;
+  }
+  return strcmp(P, "/maps") == 0;
+}
+
 int32_t EmulatedFDManager::Open(const char* pathname, int flags, uint32_t mode) {
   auto Creator = FDReadCreators.end();
   if (pathname) {
@@ -617,10 +635,52 @@ int32_t EmulatedFDManager::Open(const char* pathname, int flags, uint32_t mode) 
   }
 
   if (Creator == FDReadCreators.end()) {
+    if (pathname && IsProcMapsPath(pathname)) {
+      return ProcMaps(CTX, AT_FDCWD, pathname, flags, mode);
+    }
     return -1;
   }
 
   return Creator->second(CTX, AT_FDCWD, pathname, flags, mode);
+}
+
+int32_t EmulatedFDManager::ProcMaps(FEXCore::Context::Context* ctx, int32_t fd, const char* pathname, int32_t flags, mode_t mode) {
+  int HostFD = ::open(pathname, O_RDONLY | O_CLOEXEC);
+  if (HostFD < 0) {
+    return -1;
+  }
+  fextl::string In;
+  char Buf[65536];
+  ssize_t Len;
+  while ((Len = ::read(HostFD, Buf, sizeof(Buf))) > 0) {
+    In.append(Buf, Len);
+  }
+  ::close(HostFD);
+
+  // On x86-64 every user mapping of a process lies below TASK_SIZE_MAX, (1 << 47) - PAGE_SIZE (the only line above it
+  // is [vsyscall], which FEX does not provide). Under FEX the host file also lists FEX itself, the AArch64 host
+  // libraries and the host vdso, all placed above that limit: they are not mappings of the emulated process, and a
+  // reader that resolves a library by name (e.g. "libc.so.6") would pick the host's AArch64 copy. Drop those lines;
+  // everything below the limit is passed through unchanged.
+  constexpr uint64_t X86_64TaskSizeMax = (1ULL << 47) - 4096;
+  fextl::string Out;
+  Out.reserve(In.size());
+  size_t Pos = 0;
+  while (Pos < In.size()) {
+    size_t Eol = In.find('\n', Pos);
+    const size_t End = Eol == fextl::string::npos ? In.size() : Eol + 1;
+    const uint64_t Start = strtoull(In.c_str() + Pos, nullptr, 16);
+    if (Start < X86_64TaskSizeMax) {
+      Out.append(In, Pos, End - Pos);
+    }
+    Pos = End;
+  }
+
+  int NewFD = GenTmpFD(pathname, flags);
+  write(NewFD, Out.data(), Out.size());
+  lseek(NewFD, 0, SEEK_SET);
+  SealTmpFD(NewFD);
+  return NewFD;
 }
 
 int32_t EmulatedFDManager::ProcStatus(FEXCore::Context::Context* ctx, int32_t fd, const char* pathname, int32_t flags, mode_t mode) {
