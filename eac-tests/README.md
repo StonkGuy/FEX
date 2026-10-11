@@ -37,6 +37,7 @@ eac-tests/<name>/build.sh native [output]    # where supported: built with the h
 | `signal-regs` | A handler's register changes survive across a syscall. | 0008 |
 | `seccomp-trap` | Wine's `SECCOMP_RET_TRAP`/SIGSYS path: `si_code`/`si_syscall`/`si_arch`/`si_call_addr`, the six arguments in the ucontext, a RAX written by the handler resumes the caller; 1000 repetitions. Run with `FEX_NEEDSSECCOMP=1`. | 0010 |
 | `seccomp-trap-noexec` | A trapped syscall is never executed (a trapped `uname()` leaves its buffer untouched). Run with `FEX_NEEDSSECCOMP=1`. | 0010 |
+| `seccomp-trap-blocked` | A trapped syscall is never executed, and a blocked or ignored SIGSYS is forced like Linux does (`force_sig_seccomp`): the process dies from SIGSYS. Run with `FEX_NEEDSSECCOMP=1`. | 0036 |
 | `signal-race` | A thread looping trapped syscalls while another hammers it with SIGUSR1 can still be stopped (the shape of Wine's `NtGetContextThread`). Run with `FEX_NEEDSSECCOMP=1`. | 0010, 0022 |
 | `cpuid-fault` | `arch_prctl(ARCH_SET_CPUID/ARCH_GET_CPUID)`: a CPUID faults as SIGSEGV/`SI_KERNEL` while disabled. Re-execs itself with `FEX_ENABLECPUIDFAULTING=1`. A host CPU without `cpuid_fault` reports SKIP natively. | 0011 |
 | `ptrace-dregs` | Debug registers through `PTRACE_PEEKUSER`/`POKEUSER`, with the kernel's validation and error codes. | 0012 |
@@ -61,6 +62,7 @@ Expected results (same binaries on all three):
 | `proc-maps` | PASS (derived from the kernel source; native run pending) | FAIL | PASS |
 | `smc-remote-write` | PASS (derived from the kernel source; native run pending) | FAIL | PASS |
 | `seccomp-trap`, `seccomp-trap-noexec` | PASS | SIGSEGV | PASS |
+| `seccomp-trap-blocked` | PASS | not run | PASS (FAIL on `eac-2610.2`) |
 | `restart-syscall` | PASS | SIGILL | PASS |
 | `maps-probe` | PASS | hang (timeout) | PASS |
 | `pop-fault` | PASS | FAIL | FAIL (withdrawn 0021) |
