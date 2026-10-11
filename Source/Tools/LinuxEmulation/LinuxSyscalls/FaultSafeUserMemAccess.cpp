@@ -41,6 +41,26 @@ __attribute__((naked)) size_t CopyToUser(void* Dest, const void* Src, size_t Siz
                    : "memory");
 }
 
+__attribute__((naked)) static size_t StringReadableImpl(const char* Src) {
+  __asm volatile(R"(
+  1:
+  .globl StringReadable_FaultInst
+  StringReadable_FaultInst:
+    ldrb w1, [x0], 1; // <- This line can fault.
+    cbnz w1, 1b;
+    mov x0, 0;
+    ret;
+  )" ::
+                   : "memory");
+}
+
+bool IsStringReadable(const char* Src) {
+  return Src == nullptr || StringReadableImpl(Src) == 0;
+}
+
+extern "C" uint64_t StringReadable_FaultInst;
+void* const StringReadable_FaultLocation = &StringReadable_FaultInst;
+
 extern "C" uint64_t CopyFromUser_FaultInst;
 void* const CopyFromUser_FaultLocation = &CopyFromUser_FaultInst;
 
@@ -157,6 +177,7 @@ bool IsFaultLocation(uint64_t PC) {
   bool IsMemcpyFault = false;
   IsMemcpyFault |= reinterpret_cast<void*>(PC) == CopyToUser_FaultLocation;
   IsMemcpyFault |= reinterpret_cast<void*>(PC) == CopyFromUser_FaultLocation;
+  IsMemcpyFault |= reinterpret_cast<void*>(PC) == StringReadable_FaultLocation;
 #if defined(ASSERTIONS_ENABLED) && ASSERTIONS_ENABLED && defined(ARCHITECTURE_arm64)
   IsMemcpyFault |= reinterpret_cast<void*>(PC) == UserReadable_FaultLocation;
   IsMemcpyFault |= reinterpret_cast<void*>(PC) == UserWritable_FaultLocation;
@@ -174,6 +195,10 @@ size_t CopyFromUser(void* Dest, const void* Src, size_t Size) {
 size_t CopyToUser(void* Dest, const void* Src, size_t Size) {
   memcpy(Dest, Src, Size);
   return Size;
+}
+
+bool IsStringReadable(const char* Src) {
+  return true;
 }
 
 bool IsFaultLocation(uint64_t PC) {

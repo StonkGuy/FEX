@@ -233,6 +233,24 @@ enum Modify_ldt_func : int32_t {
   LDT_WRITE = 0x11,
 };
 
+// Gathers a null-terminated argv/envp array from the application. False if the array or one of its strings is not
+// readable: execve then returns -EFAULT like Linux (copy_strings) instead of FEX faulting while it parses them.
+static bool GatherStringArray(char* const* User, fextl::vector<const char*>& Out) {
+  for (size_t i = 0;; ++i) {
+    const char* Str;
+    if (FaultSafeUserMemAccess::CopyFromUser(&Str, &User[i], sizeof(Str))) {
+      return false;
+    }
+    Out.push_back(Str);
+    if (!Str) {
+      return true;
+    }
+    if (!FaultSafeUserMemAccess::IsStringReadable(Str)) {
+      return false;
+    }
+  }
+}
+
 void RegisterThread(FEX::HLE::SyscallHandler* Handler) {
   REGISTER_SYSCALL_IMPL_X64(modify_ldt, [](FEXCore::Core::CpuStateFrame* Frame, int func, void* ptr, unsigned long bytecount) -> uint64_t {
     switch (func) {
@@ -278,10 +296,17 @@ void RegisterThread(FEX::HLE::SyscallHandler* Handler) {
     }));
 
   REGISTER_SYSCALL_IMPL_X64(sigaltstack, [](FEXCore::Core::CpuStateFrame* Frame, const stack_t* ss, stack_t* old_ss) -> uint64_t {
-    FaultSafeUserMemAccess::VerifyIsReadableOrNull(ss, sizeof(*ss));
-    FaultSafeUserMemAccess::VerifyIsWritableOrNull(old_ss, sizeof(*old_ss));
-    return FEX::HLE::_SyscallHandler->GetSignalDelegator()->RegisterGuestSigAltStack(
-      FEX::HLE::ThreadManager::GetStateObjectFromCPUState(Frame), ss, old_ss);
+    stack_t NewStack;
+    stack_t OldStack;
+    if (ss && FaultSafeUserMemAccess::CopyFromUser(&NewStack, ss, sizeof(NewStack))) {
+      return -EFAULT;
+    }
+    uint64_t Result = FEX::HLE::_SyscallHandler->GetSignalDelegator()->RegisterGuestSigAltStack(
+      FEX::HLE::ThreadManager::GetStateObjectFromCPUState(Frame), ss ? &NewStack : nullptr, old_ss ? &OldStack : nullptr);
+    if (Result == 0 && old_ss && FaultSafeUserMemAccess::CopyToUser(old_ss, &OldStack, sizeof(OldStack))) {
+      return -EFAULT;
+    }
+    return Result;
   });
 
   // launch a new process under fex
@@ -290,20 +315,9 @@ void RegisterThread(FEX::HLE::SyscallHandler* Handler) {
     fextl::vector<const char*> Args;
     fextl::vector<const char*> Envp;
 
-    if (argv) {
-      for (int i = 0; argv[i]; i++) {
-        Args.push_back(argv[i]);
-      }
-
-      Args.push_back(nullptr);
-    }
-
-    if (envp) {
-      for (int i = 0; envp[i]; i++) {
-        Envp.push_back(envp[i]);
-      }
-
-      Envp.push_back(nullptr);
+    if (!FaultSafeUserMemAccess::IsStringReadable(pathname) || (argv && !GatherStringArray(argv, Args)) ||
+        (envp && !GatherStringArray(envp, Envp))) {
+      return -EFAULT;
     }
 
     auto* const* ArgsPtr = argv ? const_cast<char* const*>(Args.data()) : nullptr;
@@ -319,20 +333,9 @@ void RegisterThread(FEX::HLE::SyscallHandler* Handler) {
                               fextl::vector<const char*> Args;
                               fextl::vector<const char*> Envp;
 
-                              if (argv) {
-                                for (int i = 0; argv[i]; i++) {
-                                  Args.push_back(argv[i]);
-                                }
-
-                                Args.push_back(nullptr);
-                              }
-
-                              if (envp) {
-                                for (int i = 0; envp[i]; i++) {
-                                  Envp.push_back(envp[i]);
-                                }
-
-                                Envp.push_back(nullptr);
+                              if (!FaultSafeUserMemAccess::IsStringReadable(pathname) || (argv && !GatherStringArray(argv, Args)) ||
+                                  (envp && !GatherStringArray(envp, Envp))) {
+                                return -EFAULT;
                               }
 
                               FEX::HLE::ExecveAtArgs AtArgs {

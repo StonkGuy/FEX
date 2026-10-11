@@ -6,6 +6,7 @@
 #include <sys/syscall.h>
 #include <poll.h>
 #include <signal.h>
+#include <fcntl.h>
 
 TEST_CASE("poll") {
   // poll can return EFAULT if first argument is pointed to invalid pointer.
@@ -170,4 +171,60 @@ TEST_CASE("ppoll_64") {
     REQUIRE(ret == 0);
     CHECK(readonly_ts.tv_sec == 1);
   }
+}
+
+// Syscalls whose x86-64 view FEX builds itself: a bad pointer must give EFAULT like Linux, not a fault inside FEX.
+static void* InvalidPage() {
+  return mmap(nullptr, sysconf(_SC_PAGESIZE), PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+}
+
+TEST_CASE("rt_sigaction") {
+  auto invalid = InvalidPage();
+  CHECK(::syscall(SYS_rt_sigaction, SIGUSR1, invalid, nullptr, 8) == -1);
+  CHECK(errno == EFAULT);
+  CHECK(::syscall(SYS_rt_sigaction, SIGUSR1, nullptr, invalid, 8) == -1);
+  CHECK(errno == EFAULT);
+}
+
+TEST_CASE("rt_sigprocmask") {
+  auto invalid = InvalidPage();
+  CHECK(::syscall(SYS_rt_sigprocmask, SIG_BLOCK, invalid, nullptr, 8) == -1);
+  CHECK(errno == EFAULT);
+  CHECK(::syscall(SYS_rt_sigprocmask, SIG_BLOCK, nullptr, invalid, 8) == -1);
+  CHECK(errno == EFAULT);
+}
+
+TEST_CASE("sigaltstack") {
+  auto invalid = InvalidPage();
+  CHECK(::syscall(SYS_sigaltstack, invalid, nullptr) == -1);
+  CHECK(errno == EFAULT);
+  CHECK(::syscall(SYS_sigaltstack, nullptr, invalid) == -1);
+  CHECK(errno == EFAULT);
+}
+
+TEST_CASE("uname") {
+  CHECK(::syscall(SYS_uname, InvalidPage()) == -1);
+  CHECK(errno == EFAULT);
+}
+
+TEST_CASE("paths") {
+  auto invalid = InvalidPage();
+  char buf[256];
+  CHECK(::syscall(SYS_openat, AT_FDCWD, invalid, 0, 0) == -1);
+  CHECK(errno == EFAULT);
+  CHECK(::syscall(SYS_faccessat, AT_FDCWD, invalid, 0) == -1);
+  CHECK(errno == EFAULT);
+  CHECK(::syscall(SYS_readlinkat, AT_FDCWD, invalid, buf, sizeof(buf)) == -1);
+  CHECK(errno == EFAULT);
+  CHECK(::syscall(SYS_readlinkat, AT_FDCWD, "/proc/self/exe", invalid, sizeof(buf)) == -1);
+  CHECK(errno == EFAULT);
+  CHECK(::syscall(SYS_execve, invalid, nullptr, nullptr) == -1);
+  CHECK(errno == EFAULT);
+  CHECK(::syscall(SYS_execve, "/proc/self/exe", invalid, nullptr) == -1);
+  CHECK(errno == EFAULT);
+}
+
+TEST_CASE("fstat") {
+  CHECK(::syscall(SYS_fstat, STDOUT_FILENO, InvalidPage()) == -1);
+  CHECK(errno == EFAULT);
 }

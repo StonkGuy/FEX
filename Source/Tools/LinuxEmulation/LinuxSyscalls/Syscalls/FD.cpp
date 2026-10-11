@@ -38,6 +38,9 @@ void RegisterFD(FEX::HLE::SyscallHandler* Handler) {
   });
 
   REGISTER_SYSCALL_IMPL(open, [](FEXCore::Core::CpuStateFrame* Frame, const char* pathname, int flags, uint32_t mode) -> uint64_t {
+    if (!FaultSafeUserMemAccess::IsStringReadable(pathname)) {
+      return -EFAULT;
+    }
     flags = FEX::HLE::RemapFromX86Flags(flags);
     uint64_t Result = FEX::HLE::_SyscallHandler->FM.Open(pathname, flags, mode);
     SYSCALL_ERRNO();
@@ -59,6 +62,9 @@ void RegisterFD(FEX::HLE::SyscallHandler* Handler) {
   });
 
   REGISTER_SYSCALL_IMPL(access, [](FEXCore::Core::CpuStateFrame* Frame, const char* pathname, int mode) -> uint64_t {
+    if (!FaultSafeUserMemAccess::IsStringReadable(pathname)) {
+      return -EFAULT;
+    }
     uint64_t Result = FEX::HLE::_SyscallHandler->FM.Access(pathname, mode);
     SYSCALL_ERRNO();
   });
@@ -80,22 +86,34 @@ void RegisterFD(FEX::HLE::SyscallHandler* Handler) {
   });
 
   REGISTER_SYSCALL_IMPL(openat, [](FEXCore::Core::CpuStateFrame* Frame, int dirfs, const char* pathname, int flags, uint32_t mode) -> uint64_t {
+    if (!FaultSafeUserMemAccess::IsStringReadable(pathname)) {
+      return -EFAULT;
+    }
     flags = FEX::HLE::RemapFromX86Flags(flags);
     uint64_t Result = FEX::HLE::_SyscallHandler->FM.Openat(dirfs, pathname, flags, mode);
     SYSCALL_ERRNO();
   });
 
   REGISTER_SYSCALL_IMPL(readlinkat, [](FEXCore::Core::CpuStateFrame* Frame, int dirfd, const char* pathname, char* buf, size_t bufsiz) -> uint64_t {
+    if (!FaultSafeUserMemAccess::IsStringReadable(pathname)) {
+      return -EFAULT;
+    }
     uint64_t Result = FEX::HLE::_SyscallHandler->FM.Readlinkat(dirfd, pathname, buf, bufsiz);
     SYSCALL_ERRNO();
   });
 
   REGISTER_SYSCALL_IMPL(faccessat, [](FEXCore::Core::CpuStateFrame* Frame, int dirfd, const char* pathname, int mode) -> uint64_t {
+    if (!FaultSafeUserMemAccess::IsStringReadable(pathname)) {
+      return -EFAULT;
+    }
     uint64_t Result = FEX::HLE::_SyscallHandler->FM.FAccessat(dirfd, pathname, mode);
     SYSCALL_ERRNO();
   });
 
   REGISTER_SYSCALL_IMPL(faccessat2, [](FEXCore::Core::CpuStateFrame* Frame, int dirfd, const char* pathname, int mode, int flags) -> uint64_t {
+    if (!FaultSafeUserMemAccess::IsStringReadable(pathname)) {
+      return -EFAULT;
+    }
     uint64_t Result = FEX::HLE::_SyscallHandler->FM.FAccessat2(dirfd, pathname, mode, flags);
     SYSCALL_ERRNO();
   });
