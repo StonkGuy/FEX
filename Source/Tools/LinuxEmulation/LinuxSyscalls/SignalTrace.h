@@ -45,6 +45,10 @@ extern std::atomic<uint32_t> Idx;
 /// Creates the ring if FEX_SIGNALTRACE is enabled. Call once at start-up.
 void Init();
 
+/// Removes the ring's /dev/shm name on a regular exit (exit_group). Idempotent. Deaths by signal keep the ring for
+/// post-mortem decoding.
+void CleanupForExit();
+
 inline bool Enabled() {
   return Buf != nullptr;
 }
