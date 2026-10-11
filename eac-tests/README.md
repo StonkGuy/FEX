@@ -50,6 +50,7 @@ eac-tests/<name>/build.sh native [output]    # where supported: built with the h
 | `tf-iret` | Where the single-step trap lands after `POPFQ`, an `IRETQ` loading TF, Wine's `popfq; iretq`, and across cached call/ret code. | 0025 |
 | `proc-maps` | `/proc/self/maps` lists only x86-64 process mappings: everything below `TASK_SIZE_MAX` except `[vsyscall]`, every file-backed ELF mapping x86-64. | 0033 |
 | `smc-remote-write` | A code page the guest made RWX (and executed from again) can be written by another process with `process_vm_writev` (Wine's `NtWriteVirtualMemory`), and the new code runs. | 0035 |
+| `alt-nested` | SIGSEGV on a sigaltstack: the handler runs on the alt stack, a nested fault inside it is delivered recursively (`SA_NODEFER`), an alt-stack overflow kills the process, and the `si_code`/trapno/err table for three ordinary faults; check 1 (`PF_USER` in err) needs 0028. | 0028 |
 | `pop-fault` | A faulting `pop` to memory leaves RSP unchanged. Its patch (0021) is withdrawn, so it is **expected to fail** on this branch. | — |
 | `bench` | Not a pass/fail test: micro-benchmarks for code-churn invalidation (`EXTRA="-DINVAL_MODE=1 -DINVAL_THREADS=190"`) and the self-modifying-code modes; `tso_probe.c` is an ordinary Arm64 program printing the TSO `prctl` state. | 0002, 0004 |
 
