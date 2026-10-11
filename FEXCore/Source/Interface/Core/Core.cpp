@@ -641,15 +641,21 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
           Thread->OpDispatcher->_GuestOpcode(InstAddress - GuestRIP);
         }
 
-        if (Config.SMCChecks == FEXCore::Config::CONFIG_SMC_FULL || Block.ForceFullSMCDetection || SyscallHandler->IsSMCHotPage(InstAddress)) {
+        // An instruction the decoder rejected has InstSize 0; validate the bytes the decoder fetched before rejecting it
+        // instead. Validating zero bytes would report the code as changed on every execution (endless re-translation),
+        // and validating fewer bytes than the decoder looked at would let a rewritten instruction that shares them reuse
+        // this block. Nothing was fetched only for a fetch fault, which does not depend on the contents.
+        const uint8_t ValidateSize = DecodedInfo->InstSize ? DecodedInfo->InstSize : DecodedInfo->RejectedSize;
+        if (ValidateSize &&
+            (Config.SMCChecks == FEXCore::Config::CONFIG_SMC_FULL || Block.ForceFullSMCDetection || SyscallHandler->IsSMCHotPage(InstAddress))) {
           auto ExistingCodePtr = reinterpret_cast<uint8_t*>(Block.Entry + BlockInstructionsLength);
           auto InstAddressReg = Thread->OpDispatcher->_EntrypointOffset(GPRSize, InstAddress - GuestRIP);
 
-          auto Value = FEXCore::Utils::crc32(ExistingCodePtr, DecodedInfo->InstSize);
+          auto Value = FEXCore::Utils::crc32(ExistingCodePtr, ValidateSize);
           auto CRC = WantsDiskCachePatching ?
-                       Thread->OpDispatcher->_PatchableGuestCRC(IR::OpSize::i64Bit, Value, (int64_t)ExistingCodePtr, DecodedInfo->InstSize) :
+                       Thread->OpDispatcher->_PatchableGuestCRC(IR::OpSize::i64Bit, Value, (int64_t)ExistingCodePtr, ValidateSize) :
                        Thread->OpDispatcher->Constant(Value);
-          auto CodeChanged = Thread->OpDispatcher->_ValidateCode(CRC, InstAddressReg, DecodedInfo->InstSize);
+          auto CodeChanged = Thread->OpDispatcher->_ValidateCode(CRC, InstAddressReg, ValidateSize);
 
           auto InvalidateCodeCond = Thread->OpDispatcher->CondJump(CodeChanged);
 

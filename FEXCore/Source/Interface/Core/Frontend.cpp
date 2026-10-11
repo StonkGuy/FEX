@@ -107,6 +107,7 @@ bool Decoder::CheckRangeExecutable(uint64_t Address, uint64_t Size) {
     ExecutableRangeWritable = RangeInfo.Writable;
 
     if (RangeInfo.Size == 0) {
+      NonExecutableFetchAddress = Address;
       return false;
     }
 
@@ -136,6 +137,7 @@ uint8_t Decoder::ReadByte() {
 std::optional<uint8_t> Decoder::PeekByte(uint8_t Offset) {
   uint64_t ByteAddress = reinterpret_cast<uint64_t>(InstStream.InstStream + InstructionSize + Offset);
   if (CheckRangeExecutable(ByteAddress, 1)) {
+    ExaminedSize = std::max<uint8_t>(ExaminedSize, InstructionSize + Offset + 1);
     return InstStream.AdjustedInstStream[InstructionSize + Offset];
   } else {
     return std::nullopt;
@@ -151,6 +153,7 @@ std::pair<uint64_t, bool> Decoder::ReadData(uint8_t Size) {
   LastFieldReadSize = Size;
   if (CheckRangeExecutable(Address, Size)) {
     std::memcpy(&Res, &InstStream.AdjustedInstStream[InstructionSize], Size);
+    ExaminedSize = std::max<uint8_t>(ExaminedSize, InstructionSize + Size);
   } else {
     HitNonExecutableRange = true;
     // See PeekByte, this specific case may cause some executable memory to read as 0 but it doesn't matter as the entire instruction will be rolled back anyway.
@@ -848,6 +851,8 @@ Decoder::DecodedBlockStatus Decoder::NormalOpHeader(const FEXCore::X86Tables::X8
 
 Decoder::DecodedBlockStatus Decoder::DecodeInstructionImpl(uint64_t PC) {
   InstructionSize = 0;
+  ExaminedSize = 0;
+  NonExecutableFetchAddress = 0;
   LastEscapePrefix = 0;
   Instruction.fill(0);
 
@@ -1092,10 +1097,21 @@ Decoder::DecodedBlockStatus Decoder::DecodeInstruction(uint64_t PC) {
     const auto InstSize = DecodeInst->InstSize;
     DecodeInst->TableInfo = nullptr;
     DecodeInst->InstSize = 0;
+    // The bytes that led to the rejection. The core validates these on SMC-checked pages, so that rewriting them
+    // into a different instruction re-translates instead of reusing this block.
+    DecodeInst->RejectedSize = std::min<uint8_t>(ExaminedSize, MAX_INST_SIZE);
 
     // A decode error can be caused by substituting zero for an inaccessible
     // instruction byte, so the instruction fetch fault takes priority.
     if (HitNonExecutableRange) {
+      // Native reports the first byte that could not be fetched, which is past the instruction start when the
+      // instruction straddles into a non-executable page.
+      // Executable ranges are page granular, so that byte is the start of the page holding the failed read.
+      const auto InstStart = reinterpret_cast<uint64_t>(InstStream.InstStream);
+      const auto FaultPage = NonExecutableFetchAddress & ~static_cast<uint64_t>(FEXCore::Utils::FEX_PAGE_SIZE - 1);
+      if (NonExecutableFetchAddress && FaultPage > InstStart && FaultPage - InstStart < MAX_INST_SIZE) {
+        DecodeInst->FetchFaultOffset = FaultPage - InstStart;
+      }
       return InstSize ? DecodedBlockStatus::PARTIAL_DECODE_INST : DecodedBlockStatus::NOEXEC_INST;
     }
 

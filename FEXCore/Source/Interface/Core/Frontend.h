@@ -153,6 +153,8 @@ private:
   uint64_t ExecutableRangeBase {};
   uint64_t ExecutableRangeEnd {};
   bool ExecutableRangeWritable {};
+  // First guest address the current instruction's fetch could not read (0 if none): the x86 CR2 of a fetch fault.
+  uint64_t NonExecutableFetchAddress {};
   bool HitNonExecutableRange {};
   bool HitBadRelocation {};
 
@@ -183,6 +185,9 @@ private:
 
   static constexpr size_t MAX_INST_SIZE = 15;
   uint8_t InstructionSize {};
+  // Number of leading instruction bytes the decoder has successfully fetched (read or peeked) for the current
+  // instruction. Unlike InstructionSize it never counts bytes that were skipped or substituted.
+  uint8_t ExaminedSize {};
   // Contains the full decoded instruction, unless it is a `Thunk` instruction.
   std::array<uint8_t, MAX_INST_SIZE> Instruction;
   uint8_t LastEscapePrefix {};

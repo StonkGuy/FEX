@@ -241,6 +241,10 @@ struct DecodedInst {
   uint8_t SIB;
   uint8_t InstSize;
   int8_t REXIndex;
+  // For an instruction the decoder rejected (InstSize 0): how many leading bytes it fetched before rejecting it.
+  uint8_t RejectedSize;
+  // For an instruction whose fetch hit a non-executable page: offset of the first unreadable byte from the start.
+  uint8_t FetchFaultOffset;
 };
 
 union ModRMDecoded {
