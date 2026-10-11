@@ -45,6 +45,7 @@ One commit per patch, in order, on top of FEX-2610. The numbers are the PoC's pa
 | 0026 | `2169934` | Signals: keep the signal alt stack while a thread exits on it |
 | 0033 | `e8f2a2f` | proc: list only the emulated process's mappings in /proc/<pid>/maps |
 | 0035 | `3044753` | SMC: code pages the guest makes writable stay writable for other processes (based on yungtry's patch 0028) |
+| 0036 | `c37db6e` | Seccomp: never execute a trapped syscall, and force its SIGSYS like Linux |
 
 Two more commits add [eac-tests/](eac-tests/) and this file; they touch nothing FEX builds.
 
