@@ -39,7 +39,7 @@ static inline i64 sc6(i64 nr, i64 a, i64 b, i64 c, i64 d, i64 e, i64 f) {
 #define sc2(n, a, b) sc6(n, (i64)(a), (i64)(b), 0, 0, 0, 0)
 #define sc3(n, a, b, c) sc6(n, (i64)(a), (i64)(b), (i64)(c), 0, 0, 0)
 #define sc4(n, a, b, c, d) sc6(n, (i64)(a), (i64)(b), (i64)(c), (i64)(d), 0, 0)
-enum { SYS_read = 0, SYS_write = 1, SYS_open = 2, SYS_close = 3, SYS_pipe = 22, SYS_fork = 57, SYS_exit = 60, SYS_wait4 = 61,
+enum { SYS_read = 0, SYS_write = 1, SYS_open = 2, SYS_close = 3, SYS_mmap = 9, SYS_pipe = 22, SYS_fork = 57, SYS_exit = 60, SYS_wait4 = 61,
        SYS_kill = 62, SYS_exit_group = 231 };
 enum { SIGKILL = 9 };
 
@@ -151,6 +151,32 @@ __attribute__((used)) void entry_c(void) {
   // (a) the process's own view.
   check(read_file("/proc/self/maps", maps, sizeof maps) > 0, "open/read /proc/self/maps");
   check_maps("/proc/self/maps", maps, 1);
+
+  // (c) a maps file larger than one 64 KiB host read: 1500 single-page mappings with alternating protections (so the
+  // kernel cannot merge them), about 110 KiB of lines. Every one must be listed and the file must end with a newline.
+  {
+    enum { N = 1500 };
+    u64 base = sc6(SYS_mmap, 0, (N + 1) * 4096, 0 /* PROT_NONE */, 0x22 /* MAP_PRIVATE|MAP_ANONYMOUS */, -1, 0);
+    int ok_map = base < (u64)-4096;
+    for (int i = 0; ok_map && i < N; i += 2)
+      ok_map = sc6(SYS_mmap, base + i * 4096, 4096, 1 /* PROT_READ */, 0x32 /* | MAP_FIXED */, -1, 0) == (i64)(base + i * 4096);
+    check(ok_map, "map 1500 alternating-protection pages");
+    i64 len = read_file("/proc/self/maps", maps, sizeof maps);
+    out("  large maps file: "); out_dec(len > 0 ? len : 0); out(" bytes\n");
+    check(len > 65536, "maps is larger than one 64 KiB read");
+    check(len > 0 && maps[len - 1] == '\n', "the large maps file is complete (ends with a newline)");
+    int found = 0;
+    for (const char* p = maps; *p;) {
+      const char* q = p;
+      u64 a = parse_hex(&q);
+      if (a >= base && a < base + N * 4096) found++;
+      while (*p && *p != '\n') p++;
+      if (*p) p++;
+    }
+    out("  test pages listed: "); out_dec(found); out(" of "); out_dec(N); out("\n");
+    check(found == N, "every page of the test region is listed");
+    check_maps("/proc/self/maps (large)", maps, 1);
+  }
 
   // (b) another process's view, as a tracer reads it: a forked child that blocks on a pipe until it is killed.
   int fds[2];

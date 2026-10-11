@@ -648,11 +648,21 @@ int32_t EmulatedFDManager::ProcMaps(FEXCore::Context::Context* ctx, int32_t fd, 
   if (HostFD < 0) {
     return -1;
   }
+  // A failure here returns -1, which leaves the guest with the host file it opened (unfiltered) instead of a
+  // successful-looking but truncated synthesized one.
   fextl::string In;
   char Buf[65536];
-  ssize_t Len;
-  while ((Len = ::read(HostFD, Buf, sizeof(Buf))) > 0) {
-    In.append(Buf, Len);
+  for (;;) {
+    const ssize_t Len = ::read(HostFD, Buf, sizeof(Buf));
+    if (Len > 0) {
+      In.append(Buf, Len);
+    } else if (Len == 0) {
+      break;
+    } else if (errno != EINTR) {
+      LogMan::Msg::EFmt("ProcMaps: reading {} failed: {}", pathname, errno);
+      ::close(HostFD);
+      return -1;
+    }
   }
   ::close(HostFD);
 
@@ -676,8 +686,27 @@ int32_t EmulatedFDManager::ProcMaps(FEXCore::Context::Context* ctx, int32_t fd, 
   }
 
   int NewFD = GenTmpFD(pathname, flags);
-  write(NewFD, Out.data(), Out.size());
-  lseek(NewFD, 0, SEEK_SET);
+  if (NewFD < 0) {
+    LogMan::Msg::EFmt("ProcMaps: memfd_create failed: {}", errno);
+    return -1;
+  }
+  for (size_t Done = 0; Done < Out.size();) {
+    const ssize_t Wrote = ::write(NewFD, Out.data() + Done, Out.size() - Done);
+    if (Wrote > 0) {
+      Done += Wrote;
+    } else if (Wrote < 0 && errno == EINTR) {
+      continue;
+    } else {
+      LogMan::Msg::EFmt("ProcMaps: writing the synthesized file failed: {}", errno);
+      ::close(NewFD);
+      return -1;
+    }
+  }
+  if (::lseek(NewFD, 0, SEEK_SET) != 0) {
+    LogMan::Msg::EFmt("ProcMaps: lseek failed: {}", errno);
+    ::close(NewFD);
+    return -1;
+  }
   SealTmpFD(NewFD);
   return NewFD;
 }
@@ -736,8 +765,27 @@ int32_t EmulatedFDManager::ProcStatus(FEXCore::Context::Context* ctx, int32_t fd
   }
 
   int NewFD = GenTmpFD(pathname, flags);
-  write(NewFD, Out.data(), Out.size());
-  lseek(NewFD, 0, SEEK_SET);
+  if (NewFD < 0) {
+    LogMan::Msg::EFmt("ProcMaps: memfd_create failed: {}", errno);
+    return -1;
+  }
+  for (size_t Done = 0; Done < Out.size();) {
+    const ssize_t Wrote = ::write(NewFD, Out.data() + Done, Out.size() - Done);
+    if (Wrote > 0) {
+      Done += Wrote;
+    } else if (Wrote < 0 && errno == EINTR) {
+      continue;
+    } else {
+      LogMan::Msg::EFmt("ProcMaps: writing the synthesized file failed: {}", errno);
+      ::close(NewFD);
+      return -1;
+    }
+  }
+  if (::lseek(NewFD, 0, SEEK_SET) != 0) {
+    LogMan::Msg::EFmt("ProcMaps: lseek failed: {}", errno);
+    ::close(NewFD);
+    return -1;
+  }
   SealTmpFD(NewFD);
   return NewFD;
 }
