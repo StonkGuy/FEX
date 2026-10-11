@@ -887,9 +887,11 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
       auto LoadedCode = Thread->CPUBackend->LoadCachedCode(Hit->HostCode);
       if (LoadedCode.BlockBegin) {
         for (auto& CodePage : Hit->GuestPages) {
-          if (Thread->LookupCache->AddBlockExecutableRange(Thread, Hit->EntryPointRIPs, CodePage, FEXCore::Utils::FEX_PAGE_SIZE)) {
+          // Protect before publishing, see the comment at the JIT path below.
+          if (!Thread->LookupCache->HasBlockExecutableRange(CodePage)) {
             SyscallHandler->MarkGuestExecutableRange(Thread, CodePage, FEXCore::Utils::FEX_PAGE_SIZE);
           }
+          Thread->LookupCache->AddBlockExecutableRange(Thread, Hit->EntryPointRIPs, CodePage, FEXCore::Utils::FEX_PAGE_SIZE);
         }
 
         LOGMAN_THROW_A_FMT(Hit->EntryPointRIPs.size() == Hit->EntryPointHostOffsets.size(), "Mismatched Disk Cache entrypoint pairs!");
@@ -979,13 +981,18 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
   if (NeedsAddGuestCodeRanges) {
     // Track in the guest to host map all entrypoints for all pages the compiled block touches, if any page didn't previously
     // contain code, inform the frontend so it can setup SMC detection.
+    // The page must be protected before it is published as containing code: another thread compiling from the same
+    // page skips the protection once it sees the page registered, and would otherwise run its block (and write to the
+    // page without faulting) before the first thread's mprotect lands. Invalidation can't interleave here, it takes
+    // CodeInvalidationMutex exclusively.
     auto BlockInfo = Thread->FrontendDecoder->GetDecodedBlockInfo();
     CodePages.reserve(BlockInfo->CodePages.size());
     CodePages.insert(CodePages.end(), BlockInfo->CodePages.begin(), BlockInfo->CodePages.end());
     for (auto CodePage : BlockInfo->CodePages) {
-      if (Thread->LookupCache->AddBlockExecutableRange(Thread, BlockInfo->EntryPoints, CodePage, FEXCore::Utils::FEX_PAGE_SIZE)) {
+      if (!Thread->LookupCache->HasBlockExecutableRange(CodePage)) {
         SyscallHandler->MarkGuestExecutableRange(Thread, CodePage, FEXCore::Utils::FEX_PAGE_SIZE);
       }
+      Thread->LookupCache->AddBlockExecutableRange(Thread, BlockInfo->EntryPoints, CodePage, FEXCore::Utils::FEX_PAGE_SIZE);
     }
   }
 
