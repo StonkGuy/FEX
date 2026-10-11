@@ -453,8 +453,15 @@ SeccompEmulator::ExecuteFilter(FEXCore::Core::CpuStateFrame* Frame, uint64_t JIT
 
     Thread->SeccompTrapRIP = PostSyscallRIP;
 
+    // Linux raises the trap with force_sig_seccomp(): a SIGSYS the thread blocks or ignores is reset to SIG_DFL and
+    // unblocked, so the process dies from it rather than continuing with the signal pending.
+    SignalDelegation->PrepareForcedGuestSignal(Thread, SIGSYS);
     SignalDelegation->QueueSignal(::getpid(), ::gettid(), SIGSYS, &Info, true);
-    break;
+
+    // A trapped syscall is never executed: the kernel skips it after syscall_rollback(), which leaves the syscall number
+    // in RAX. Normally the guest handler has already run inside QueueSignal and its rt_sigreturn does not come back here;
+    // this return covers a SIGSYS that could not be delivered synchronously (a signal-deferring section).
+    return {true, Args->Argument[0]};
   }
   case SECCOMP_RET_ERRNO: {
     // errno return is clamped.
