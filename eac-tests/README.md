@@ -40,6 +40,7 @@ eac-tests/<name>/build.sh native [output]    # where supported: built with the h
 | `ptrace-inject` | The whole `ptrace` conversation of a launcher injecting into a child (35 checks). Under stock FEX it hangs after `PASS: fork`. `run.sh` runs it with a 60 s timeout. | 0001 |
 | `signal-mask` | The Linux signal-mask rule around guest handlers. | 0007, 0008 |
 | `signal-regs` | A handler's register changes survive across a syscall. | 0008 |
+| `sigreturn-jit-regs` | After a handler's `rt_sigreturn` into code that makes no syscall, a SIGSEGV handler and a store to the code's own page see the current RSP, not the one from the last syscall. Run also with `FEX_SMCHOTPAGEFAULTS=0`. | 0038 |
 | `seccomp-trap` | Wine's `SECCOMP_RET_TRAP`/SIGSYS path: `si_code`/`si_syscall`/`si_arch`/`si_call_addr`, the six arguments in the ucontext, a RAX written by the handler resumes the caller; 1000 repetitions. Run with `FEX_NEEDSSECCOMP=1`. | 0010 |
 | `seccomp-trap-noexec` | A trapped syscall is never executed (a trapped `uname()` leaves its buffer untouched). Run with `FEX_NEEDSSECCOMP=1`. | 0010 |
 | `seccomp-trap-blocked` | A trapped syscall is never executed, and a blocked or ignored SIGSYS is forced like Linux does (`force_sig_seccomp`): the process dies from SIGSYS. Run with `FEX_NEEDSSECCOMP=1`. | 0036 |
@@ -86,6 +87,7 @@ Expected results (same binaries on all three):
 | `fdexec-argv` | PASS | FAIL (FD cases without binfmt_misc, FD_CLOEXEC case with it) | PASS |
 | `execve-seccomp` | PASS | FAIL (the `#!` case) | PASS |
 | `restart-syscall` | PASS | SIGILL | PASS |
+| `sigreturn-jit-regs` | not run yet | not run | PASS (FAIL on `eac-2610` before 0038) |
 | `maps-probe` | PASS | hang (timeout) | PASS |
 | `pop-fault` | PASS | FAIL | FAIL (withdrawn 0021) |
 
