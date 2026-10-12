@@ -48,6 +48,7 @@ public:
 
   void* Mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset) override;
   int Munmap(void* addr, size_t length) override;
+  void TrackUnmapped(void* addr, size_t length) override;
   void* Mremap(void* old_address, size_t old_size, size_t new_size, int flags, void* new_address) override;
   uint64_t Shmat(int shmid, const void* shmaddr, int shmflg, uint32_t* ResultAddress) override;
   uint64_t Shmdt(const void* shmaddr) override;
@@ -286,6 +287,18 @@ int MemAllocator32Bit::Munmap(void* addr, size_t length) {
   }
 
   return 0;
+}
+
+void MemAllocator32Bit::TrackUnmapped(void* addr, size_t length) {
+  std::scoped_lock<std::mutex> lk {AllocMutex};
+
+  // The pages the constructor reserves (below BASE_KEY and TOP_KEY itself) stay reserved.
+  const uint64_t Addr = reinterpret_cast<uintptr_t>(addr);
+  const uint64_t PageAddr = std::max(Addr >> FEXCore::Utils::FEX_PAGE_SHIFT, BASE_KEY);
+  const uint64_t PageEnd = std::min(FEXCore::AlignUp(Addr + length, FEXCore::Utils::FEX_PAGE_SIZE) >> FEXCore::Utils::FEX_PAGE_SHIFT, TOP_KEY);
+  if (PageAddr < PageEnd) {
+    SetFreePages(PageAddr, PageEnd - PageAddr);
+  }
 }
 
 void* MemAllocator32Bit::Mremap(void* old_address, size_t old_size, size_t new_size, int flags, void* new_address) {
