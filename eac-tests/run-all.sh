@@ -28,6 +28,7 @@ smc-same-page       smc_same_page_test          PASS -
 smc-same-page       smc_same_page_test          PASS FEX_SMCHOTPAGEFAULTS=0
 ptrace-dregs        ptrace_dregs_test           PASS -
 ptrace-regsets      ptrace_regsets_test         PASS -
+ptrace-sigbus       ptrace_sigbus_test          PASS -
 restart-syscall     restart_syscall_test        PASS -
 signal-frame        signal_frame_test           PASS -
 signal-frame        signal_frame_test           PASS FEX_HOSTFEATURES=disableavx

@@ -43,6 +43,7 @@ eac-tests/<name>/build.sh native [output]    # where supported: built with the h
 | `ptrace-dregs` | Debug registers through `PTRACE_PEEKUSER`/`POKEUSER`, with the kernel's validation and error codes. | 0012 |
 | `proc-status` | `Seccomp:` and `TracerPid:` in `/proc/self/status`. Re-execs itself with `FEX_NEEDSSECCOMP=1`. | 0013 |
 | `ptrace-regsets` | `PTRACE_GETREGSET`/`SETREGSET`: `NT_PRSTATUS`, `NT_X86_XSTATE`, `-EINVAL` for an unknown type. | 0014 |
+| `ptrace-sigbus` | A tracer sees no SIGBUS stop for unaligned atomics (FEX's own `BUS_ADRALN` on arm64), and still sees the tracee's real SIGBUS (`BUS_ADRERR`). | 0039 |
 | `restart-syscall` | `restart_syscall` returns `-EINTR` and the process survives. | 0015 |
 | `signal-frame` | The signal frame against what Linux writes: TF single-step, CS/SS `0x33`/`0x2b`, the XSAVE fpstate trailer (run a second time with `FEX_HOSTFEATURES=disableavx` for the FXSAVE frame), `ud2` → `ILL_ILLOPN`, `uc_sigmask`, a frame that does not fit the stack. | 0016–0020 |
 | `sigreturn-eflags` | `rt_sigreturn` applies EFLAGS a handler wrote (DF; TF starts single-stepping with exactly one SIGTRAP). | 0016 |
@@ -59,6 +60,7 @@ Expected results (same binaries on all three):
 | test | native x86-64 | stock FEX-2610 | eac-2610 |
 |---|---|---|---|
 | `ptrace-inject` | PASS | hang (timeout) | PASS |
+| `ptrace-sigbus` | not run yet | not run | PASS (FAIL on `eac-2610` before 0039) |
 | `signal-mask`, `signal-regs`, `signal-race`, `cpuid-fault`, `proc-status`, `ptrace-regsets`, `ptrace-dregs`, `signal-frame`, `sigreturn-eflags`, `tf-iret` | PASS | FAIL | PASS |
 | `proc-maps` | PASS (x86-64, kernel 6.19) | FAIL | PASS |
 | `smc-remote-write` | PASS (x86-64, kernel 6.19) | FAIL | PASS |
