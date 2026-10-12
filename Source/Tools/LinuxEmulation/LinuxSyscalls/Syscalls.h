@@ -289,8 +289,19 @@ public:
 
   ///// VMA (Virtual Memory Area) tracking /////
   static bool HandleSegfault(FEXCore::Core::InternalThreadState* Thread, int Signal, void* info, void* ucontext);
+  static void InvalidateWrittenCodePage(FEXCore::Core::InternalThreadState* Thread, uint64_t FaultBase, uint64_t EntryBase,
+                                        const FEX::HLE::VMATracking::VMAEntry& Mapping);
   void MarkGuestExecutableRange(FEXCore::Core::InternalThreadState* Thread, uint64_t Start, uint64_t Length) override;
   bool IsSMCHotPage(uint64_t Address) override;
+
+  // SMCChecks=mtrack write-protects pages that hold translated code and relies on SIGSEGV to notice a write. A host
+  // syscall that writes guest memory cannot raise that signal: the kernel returns EFAULT, or a short count that ends
+  // at the protected page (issue #5874). Call this before a read-like syscall that fills [Buf, Buf + Length): it
+  // invalidates the translated code in the part of the range that the guest may write and that can hold code (a
+  // writable guest-executable mapping, or a writable mirror of a shared one) and makes it writable again, exactly
+  // as a guest store would. The syscall itself then runs once, unchanged.
+  // Cost when unused: the SMCChecks compare and, for a buffer in a non-executable private mapping, one VMA lookup.
+  void PrepareGuestBufferForKernelWrite(FEXCore::Core::InternalThreadState* Thread, const void* Buf, size_t Length);
   void InvalidateGuestCodeRange(FEXCore::Core::InternalThreadState* Thread, uint64_t Start, uint64_t Length) override;
   std::optional<FEXCore::ExecutableFileSectionInfo>
   LookupExecutableFileSection(FEXCore::Core::InternalThreadState* Thread, uint64_t GuestAddr) final override;
