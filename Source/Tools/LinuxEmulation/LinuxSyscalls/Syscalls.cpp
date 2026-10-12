@@ -340,7 +340,12 @@ uint64_t ExecveHandler(FEXCore::Core::CpuStateFrame* Frame, const char* pathname
   // - seccomp inheritance
   // - FEXServer FD inheritance (unshare(CLONE_NEWNET))
   // - FD_CLOEXEC set on FD on anonymous file FD.
-  const bool NeedsEnvpCopy = (IsFDExec && !(IsBinfmtCompatible || IsOtherELF)) || HasSeccomp || NeedsFDCopy || NeedsLoaderFD;
+  // The FD to execute is handed to the next FEX through `FEX_EXECVEFD`: an FD execveat that binfmt_misc can't handle,
+  // or a path exec that has to keep its resolved host ELF open.
+  // Seccomp inheritance alone must not take this path: a path exec has no FD to hand over (Args.dirfd is AT_FDCWD), and
+  // an FD exec of a foreign ELF goes straight to the kernel, which still needs AT_EMPTY_PATH.
+  const bool NeedsExecveFD = (IsFDExec && !(IsBinfmtCompatible || IsOtherELF)) || NeedsFDCopy || NeedsLoaderFD;
+  const bool NeedsEnvpCopy = NeedsExecveFD || HasSeccomp;
 
   // We are trying to execute a shebang handled by a different architecture interpreter (e.g. /usr/bin/python from the host FS).
   // In this case we just defer to the kernel.
@@ -356,7 +361,7 @@ uint64_t ExecveHandler(FEXCore::Core::CpuStateFrame* Frame, const char* pathname
       }
     }
 
-    if (!IsBinfmtCompatible || NeedsFDCopy) {
+    if (NeedsExecveFD) {
       if (NeedsFDCopy) {
         // FEX needs the FD to live past execve when binfmt_misc isn't used,
         // so duplicate the FD if FD_CLOEXEC is set, which removes the FD_CLOEXEC flag.
