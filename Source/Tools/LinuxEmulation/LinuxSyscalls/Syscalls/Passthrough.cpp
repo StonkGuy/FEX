@@ -13,6 +13,7 @@ $end_info$
 #include "LinuxSyscalls/SignalTrace.h"
 
 #include <errno.h>
+#include <sys/socket.h>
 #include <sys/syscall.h>
 #include <unistd.h>
 
@@ -219,6 +220,8 @@ static void RegisterCommon(FEX::HLE::SyscallHandler* Handler) {
   // Wine's thread wake-up protocol moves 16-byte records through a pipe per thread; with FEX_SIGNALTRACE those reads and writes
   // (and their first 8 bytes, the wait cookie) go into the trace ring.
   REGISTER_SYSCALL_IMPL(read, [](FEXCore::Core::CpuStateFrame* Frame, int fd, void* buf, size_t count) -> uint64_t {
+    // The buffer may share a page with translated code (issue #5874).
+    FEX::HLE::_SyscallHandler->PrepareGuestBufferForKernelWrite(Frame->Thread, buf, count);
     uint64_t Result = ::syscall(SYSCALL_DEF(read), fd, buf, count);
     if (count == 16 && SigTrace::Enabled()) {
       const int Errno = errno;
@@ -244,7 +247,13 @@ static void RegisterCommon(FEX::HLE::SyscallHandler* Handler) {
   REGISTER_SYSCALL_IMPL(socket, SyscallPassthrough3<SYSCALL_DEF(socket)>);
   REGISTER_SYSCALL_IMPL(connect, SyscallPassthrough3<SYSCALL_DEF(connect)>);
   REGISTER_SYSCALL_IMPL(sendto, SyscallPassthrough6<SYSCALL_DEF(sendto)>);
-  REGISTER_SYSCALL_IMPL(recvfrom, SyscallPassthrough6<SYSCALL_DEF(recvfrom)>);
+  REGISTER_SYSCALL_IMPL(recvfrom,
+                        [](FEXCore::Core::CpuStateFrame* Frame, int sockfd, void* buf, size_t len, int flags, struct sockaddr* src_addr,
+                           socklen_t* addrlen) -> uint64_t {
+    FEX::HLE::_SyscallHandler->PrepareGuestBufferForKernelWrite(Frame->Thread, buf, len);
+    uint64_t Result = ::syscall(SYSCALL_DEF(recvfrom), sockfd, buf, len, flags, src_addr, addrlen);
+    SYSCALL_ERRNO();
+  });
   REGISTER_SYSCALL_IMPL(shutdown, SyscallPassthrough2<SYSCALL_DEF(shutdown)>);
   REGISTER_SYSCALL_IMPL(bind, SyscallPassthrough3<SYSCALL_DEF(bind)>);
   REGISTER_SYSCALL_IMPL(listen, SyscallPassthrough2<SYSCALL_DEF(listen)>);
@@ -457,7 +466,11 @@ namespace x64 {
     RegisterCommon(Handler);
     REGISTER_SYSCALL_IMPL_X64(ftruncate, SyscallPassthrough2<SYSCALL_DEF(ftruncate)>);
     REGISTER_SYSCALL_IMPL_X64(ioctl, SyscallPassthrough3<SYSCALL_DEF(ioctl)>);
-    REGISTER_SYSCALL_IMPL_X64(pread_64, SyscallPassthrough4<SYSCALL_DEF(pread_64)>);
+    REGISTER_SYSCALL_IMPL_X64(pread_64, [](FEXCore::Core::CpuStateFrame* Frame, int fd, void* buf, size_t count, off_t offset) -> uint64_t {
+      FEX::HLE::_SyscallHandler->PrepareGuestBufferForKernelWrite(Frame->Thread, buf, count);
+      uint64_t Result = ::syscall(SYSCALL_DEF(pread_64), fd, buf, count, offset);
+      SYSCALL_ERRNO();
+    });
     REGISTER_SYSCALL_IMPL_X64(pwrite_64, SyscallPassthrough4<SYSCALL_DEF(pwrite_64)>);
     REGISTER_SYSCALL_IMPL_X64(readv, SyscallPassthrough3<SYSCALL_DEF(readv)>);
     REGISTER_SYSCALL_IMPL_X64(writev, SyscallPassthrough3<SYSCALL_DEF(writev)>);
