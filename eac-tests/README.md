@@ -42,6 +42,7 @@ eac-tests/<name>/build.sh native [output]    # where supported: built with the h
 | `fdexec-argv` | `fexecve()` (`execveat(fd, "", AT_EMPTY_PATH)`), the same with an `FD_CLOEXEC` fd, `execve("/proc/self/fd/N")` and a path `execve` pass argv (including argv[0]) and envp unchanged. Run with and without FEX's binfmt_misc registration. | 0039 |
 | `cpuid-fault` | `arch_prctl(ARCH_SET_CPUID/ARCH_GET_CPUID)`: a CPUID faults as SIGSEGV/`SI_KERNEL` while disabled. Re-execs itself with `FEX_ENABLECPUIDFAULTING=1`. A host CPU without `cpuid_fault` reports SKIP natively. | 0011 |
 | `munmap-4g` | x86-64 munmap across 4 GiB, with holes, at the 4 GiB boundary, MAP_32BIT reuse, overflowing lengths. | #5847 |
+| `smc-hot-page` | A code page written all the time (data next to code, code rewritten in place, a memfd mirror) keeps running the right code; per loop, the SMC write faults stay within `FEX_SMCHOTPAGEFAULTS`. Run a second time with `FEX_SMCHOTPAGEFAULTS=0` as the negative control (expected FAIL). | 0002 |
 | `ptrace-dregs` | Debug registers through `PTRACE_PEEKUSER`/`POKEUSER`, with the kernel's validation and error codes. | 0012 |
 | `proc-status` | `Seccomp:` and `TracerPid:` in `/proc/self/status`. Re-execs itself with `FEX_NEEDSSECCOMP=1`. | 0013 |
 | `sigtrace-unlink` | `FEX_SIGNALTRACE=1` ring `/dev/shm/fex-<pid>-sigtrace` exists while the process runs and is gone after a normal exit. Re-execs itself with the option. | 0007 |
