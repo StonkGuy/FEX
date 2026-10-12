@@ -32,6 +32,7 @@ smc-same-page       smc_same_page_test          PASS FEX_SMCHOTPAGEFAULTS=0
 munmap-4g           munmap_4g_test              PASS -
 smc-hot-page        smc_hot_page_test           PASS -
 smc-hot-page        smc_hot_page_test           FAIL FEX_SMCHOTPAGEFAULTS=0
+smc-kernel-write    smc_kernel_write_test       PASS -
 ptrace-dregs        ptrace_dregs_test           PASS -
 ptrace-regsets      ptrace_regsets_test         PASS -
 restart-syscall     restart_syscall_test        PASS -
