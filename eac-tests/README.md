@@ -40,6 +40,7 @@ eac-tests/<name>/build.sh native [output]    # where supported: built with the h
 | `seccomp-trap-blocked` | A trapped syscall is never executed, and a blocked or ignored SIGSYS is forced like Linux does (`force_sig_seccomp`): the process dies from SIGSYS. Run with `FEX_NEEDSSECCOMP=1`. | 0036 |
 | `signal-race` | A thread looping trapped syscalls while another hammers it with SIGUSR1 can still be stopped (the shape of Wine's `NtGetContextThread`). Run with `FEX_NEEDSSECCOMP=1`. | 0010, 0022 |
 | `cpuid-fault` | `arch_prctl(ARCH_SET_CPUID/ARCH_GET_CPUID)`: a CPUID faults as SIGSEGV/`SI_KERNEL` while disabled. Re-execs itself with `FEX_ENABLECPUIDFAULTING=1`. A host CPU without `cpuid_fault` reports SKIP natively. | 0011 |
+| `smc-kernel-write` | read, pread64, recvfrom (file, pipe, stream, datagram) into a page that holds translated code fill it as Linux does; mirrors, partial and EFAULT cases. | #5874 |
 | `ptrace-dregs` | Debug registers through `PTRACE_PEEKUSER`/`POKEUSER`, with the kernel's validation and error codes. | 0012 |
 | `proc-status` | `Seccomp:` and `TracerPid:` in `/proc/self/status`. Re-execs itself with `FEX_NEEDSSECCOMP=1`. | 0013 |
 | `ptrace-regsets` | `PTRACE_GETREGSET`/`SETREGSET`: `NT_PRSTATUS`, `NT_X86_XSTATE`, `-EINVAL` for an unknown type. | 0014 |
