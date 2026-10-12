@@ -20,6 +20,8 @@ TESTS='
 ptrace-inject       ptrace_inject_test          PASS -
 signal-mask         signal_mask_test            PASS -
 signal-regs         signal_regs_test            PASS -
+sigreturn-jit-regs  sigreturn_jit_regs_test     PASS -
+sigreturn-jit-regs  sigreturn_jit_regs_test     PASS FEX_SMCHOTPAGEFAULTS=0
 seccomp-trap        seccomp_trap_test           PASS FEX_NEEDSSECCOMP=1
 seccomp-trap-noexec seccomp_trap_noexec_test    PASS FEX_NEEDSSECCOMP=1
 seccomp-trap-blocked seccomp_trap_blocked_test  PASS FEX_NEEDSSECCOMP=1
