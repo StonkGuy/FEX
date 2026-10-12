@@ -395,15 +395,28 @@ uint64_t SyscallHandler::GuestMunmap(bool Is64Bit, FEXCore::Core::InternalThread
     // To be more optimal the frontend should provide this code with a valid Thread object earlier.
     auto lk = FEXCore::GuardSignalDeferringSectionWithFallback(VMATracking.Mutex, Thread);
 
-    if (reinterpret_cast<uintptr_t>(addr) < 0x1'0000'0000ULL) {
+    if (!Is64Bit) {
       Result = Get32BitAllocator()->Munmap(addr, length);
       if (FEX::HLE::HasSyscallError(Result)) {
         return Result;
       }
     } else {
+      // The host address space is larger than x86-64's: a range Linux rejects (mm/vma.c do_vmi_munmap, end past
+      // TASK_SIZE) would reach FEX's own mappings above it.
+      // TASK_SIZE_MAX with 4-level paging (arch/x86/include/asm/page_64_types.h).
+      constexpr uint64_t X86_64TaskSizeMax = (1ULL << 47) - FEXCore::Utils::FEX_PAGE_SIZE;
+      const uint64_t Addr = reinterpret_cast<uint64_t>(addr);
+      if (Addr > X86_64TaskSizeMax || Size > X86_64TaskSizeMax - Addr || (length != 0 && Size == 0)) {
+        return -EINVAL;
+      }
+      // An x86-64 range is not confined to either side of 4GB and may be mostly holes: the kernel takes all of it.
       Result = ::munmap(addr, length);
       if (Result == -1) {
         return -errno;
+      }
+      if (reinterpret_cast<uintptr_t>(addr) < 0x1'0000'0000ULL) {
+        // MAP_32BIT mappings come from the 32-bit allocator, which has to learn that their pages are free again.
+        Get32BitAllocator()->TrackUnmapped(addr, length);
       }
     }
     TrackMunmap(Thread, addr, length);
