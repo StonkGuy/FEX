@@ -641,7 +641,10 @@ uint64_t SeccompEmulator::SetModeFilter(FEXCore::Core::CpuStateFrame* Frame, uin
     return -EINVAL;
   }
 
-  if (!prog) {
+  // Like Linux (seccomp_prepare_user_filter), the program header and then its instructions are copied in first; a bad
+  // pointer in either is -EFAULT, not a fault inside the emulator.
+  sock_fprog UserProg;
+  if (FaultSafeUserMemAccess::CopyFromUser(&UserProg, prog, sizeof(UserProg))) {
     return -EFAULT;
   }
 
@@ -650,11 +653,21 @@ uint64_t SeccompEmulator::SetModeFilter(FEXCore::Core::CpuStateFrame* Frame, uin
     return -EACCES;
   }
 
-  if (prog->len > BPF_MAXINSNS || prog->len == 0) {
+  if (UserProg.len > BPF_MAXINSNS || UserProg.len == 0) {
     // operation specified SECCOMP_SET_MODE_FILTER, but the filter program pointed to by args was not valid or the length of the filter
     // program was zero or exceeded BPF_MAXINSNS (4096) instructions.
     return -EINVAL;
   }
+
+  fextl::vector<sock_filter> Instructions(UserProg.len);
+  if (FaultSafeUserMemAccess::CopyFromUser(Instructions.data(), UserProg.filter, UserProg.len * sizeof(sock_filter))) {
+    return -EFAULT;
+  }
+  const sock_fprog LocalProg {
+    .len = UserProg.len,
+    .filter = Instructions.data(),
+  };
+  prog = &LocalProg;
 
   // Don't interrupt me while I'm jitting.
   auto lk = FEXCore::MaskSignalsAndLockMutex(FilterMutex);

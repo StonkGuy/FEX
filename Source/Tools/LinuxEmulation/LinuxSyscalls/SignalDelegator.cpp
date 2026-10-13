@@ -264,10 +264,13 @@ void SignalDelegator::RestoreThreadState(FEXCore::Core::InternalThreadState* Thr
 
   // Restore host state
   ArchHelpers::Context::RestoreContext(ucontext, Context);
-  if (Context->Flags & ArchHelpers::Context::ContextFlags::CONTEXT_FLAG_SYSCALLINFO_CLEARED) {
-    // Back in the syscall handler the guest signal interrupted.
-    Thread->CurrentFrame->InSyscallInfo = Context->ClearedSyscallInfo;
-  }
+  // Put back the InSyscallInfo of the interrupted code. The current value belongs to the rt_sigreturn syscall op, whose
+  // epilogue that clears it never runs: execution resumes at the interrupted host PC instead. Left in place, the next
+  // signal in JIT code would skip spilling the live static registers (RSP included) and build its frame from stale state.
+  // A guest that changed the RIP goes back to the dispatcher instead; RestoreFrame_* then overrides this.
+  Thread->CurrentFrame->InSyscallInfo = (Context->Flags & ArchHelpers::Context::ContextFlags::CONTEXT_FLAG_SYSCALLINFO_CLEARED) ?
+                                          Context->ClearedSyscallInfo :
+                                          Context->InSyscallInfo;
 
   {
     auto ThreadObject = FEX::HLE::ThreadManager::GetStateObjectFromFEXCoreThread(Thread);
@@ -635,7 +638,8 @@ bool SignalDelegator::HandleFrontendSIGSEGV(FEXCore::Core::InternalThreadState* 
   auto SigInfo = *static_cast<siginfo_t*>(Info);
 
   if (FaultSafeUserMemAccess::TryHandleSafeFault(Signal, SigInfo, UContext)) {
-    ERROR_AND_DIE_FMT("Received invalid data to syscall. Crashing now!");
+    // A syscall handler touched a bad application pointer through a fault-safe accessor: it returns EFAULT.
+    return true;
   }
 
 #ifdef ARCHITECTURE_arm64

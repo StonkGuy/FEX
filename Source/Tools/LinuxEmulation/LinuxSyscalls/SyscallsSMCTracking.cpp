@@ -42,6 +42,46 @@ static void HandleSegfaultForCodeCacheFinalization(FEXCore::Core::InternalThread
   }
 }
 
+// Invalidates the translated code of one guest page that is being written and makes it writable again (the page is
+// write-protected while it holds code, SMCChecks=mtrack). Every mirror of a shared mapping is flushed.
+// Callers hold VMATracking.Mutex (shared) and have checked that the guest mapping is writable.
+void SyscallHandler::InvalidateWrittenCodePage(FEXCore::Core::InternalThreadState* Thread, uint64_t FaultBase, uint64_t EntryBase,
+                                               const FEX::HLE::VMATracking::VMAEntry& Mapping) {
+  auto UnprotectRegionCallback = [](uintptr_t Start, uintptr_t Length) {
+    auto rv = mprotect((void*)Start, Length, PROT_READ | PROT_WRITE);
+    LogMan::Throw::AFmt(rv == 0, "mprotect({}, {}) failed", Start, Length);
+  };
+
+  if (Mapping.Flags.Shared) {
+    LOGMAN_THROW_A_FMT(Mapping.Resource, "VMA tracking error");
+
+    auto Offset = FaultBase - EntryBase + Mapping.Offset;
+
+    auto VMA = Mapping.Resource->FirstVMA;
+    LOGMAN_THROW_A_FMT(VMA, "VMA tracking error");
+
+    // Flush all mirrors, remap the page writable as needed
+    do {
+      if (VMA->Offset <= Offset && (VMA->Offset + VMA->Length) > Offset) {
+        auto FaultBaseMirrored = Offset - VMA->Offset + VMA->Base;
+
+        if (VMA->Prot.Writable) {
+          _SyscallHandler->TM.InvalidateGuestCodeRange(Thread, FaultBaseMirrored, FEXCore::Utils::FEX_PAGE_SIZE, UnprotectRegionCallback);
+        } else {
+          _SyscallHandler->TM.InvalidateGuestCodeRange(Thread, FaultBaseMirrored, FEXCore::Utils::FEX_PAGE_SIZE);
+        }
+
+        // Code usually executes from a different mirror than the one that is written through, so every mirror
+        // is accounted: the one that is translated has to become hot.
+        _SyscallHandler->SMCHotPages.RecordFault(FaultBaseMirrored, _SyscallHandler->SMCHotPageFaults());
+      }
+    } while ((VMA = VMA->ResourceNextVMA));
+  } else {
+    _SyscallHandler->TM.InvalidateGuestCodeRange(Thread, FaultBase, FEXCore::Utils::FEX_PAGE_SIZE, UnprotectRegionCallback);
+    _SyscallHandler->SMCHotPages.RecordFault(FaultBase, _SyscallHandler->SMCHotPageFaults());
+  }
+}
+
 // Handles segfaults from:
 // - call-ret shadow stack overflow
 // - guest-side self-modifying code (SMC)
@@ -91,40 +131,7 @@ bool SyscallHandler::HandleSegfault(FEXCore::Core::InternalThreadState* Thread, 
     }
 
     auto FaultBase = FEXCore::AlignDown(FaultAddress, FEXCore::Utils::FEX_PAGE_SIZE);
-
-    auto UnprotectRegionCallback = [](uintptr_t Start, uintptr_t Length) {
-      auto rv = mprotect((void*)Start, Length, PROT_READ | PROT_WRITE);
-      LogMan::Throw::AFmt(rv == 0, "mprotect({}, {}) failed", Start, Length);
-    };
-
-    if (Entry->second.Flags.Shared) {
-      LOGMAN_THROW_A_FMT(Entry->second.Resource, "VMA tracking error");
-
-      auto Offset = FaultBase - Entry->first + Entry->second.Offset;
-
-      auto VMA = Entry->second.Resource->FirstVMA;
-      LOGMAN_THROW_A_FMT(VMA, "VMA tracking error");
-
-      // Flush all mirrors, remap the page writable as needed
-      do {
-        if (VMA->Offset <= Offset && (VMA->Offset + VMA->Length) > Offset) {
-          auto FaultBaseMirrored = Offset - VMA->Offset + VMA->Base;
-
-          if (VMA->Prot.Writable) {
-            _SyscallHandler->TM.InvalidateGuestCodeRange(Thread, FaultBaseMirrored, FEXCore::Utils::FEX_PAGE_SIZE, UnprotectRegionCallback);
-          } else {
-            _SyscallHandler->TM.InvalidateGuestCodeRange(Thread, FaultBaseMirrored, FEXCore::Utils::FEX_PAGE_SIZE);
-          }
-
-          // Code usually executes from a different mirror than the one that is written through, so every mirror
-          // is accounted: the one that is translated has to become hot.
-          _SyscallHandler->SMCHotPages.RecordFault(FaultBaseMirrored, _SyscallHandler->SMCHotPageFaults());
-        }
-      } while ((VMA = VMA->ResourceNextVMA));
-    } else {
-      _SyscallHandler->TM.InvalidateGuestCodeRange(Thread, FaultBase, FEXCore::Utils::FEX_PAGE_SIZE, UnprotectRegionCallback);
-      _SyscallHandler->SMCHotPages.RecordFault(FaultBase, _SyscallHandler->SMCHotPageFaults());
-    }
+    InvalidateWrittenCodePage(Thread, FaultBase, Entry->first, Entry->second);
 
     FEXCORE_PROFILE_INSTANT_INCREMENT(Thread, AccumulatedSMCCount, 1);
 
@@ -143,6 +150,50 @@ bool SyscallHandler::HandleSegfault(FEXCore::Core::InternalThreadState* Thread, 
     }
 
     return true;
+  }
+}
+
+void SyscallHandler::PrepareGuestBufferForKernelWrite(FEXCore::Core::InternalThreadState* Thread, const void* Buf, size_t Length) {
+  if (SMCChecks != FEXCore::Config::CONFIG_SMC_MTRACK || Length == 0) [[likely]] {
+    return;
+  }
+
+  const uint64_t Start = FEXCore::AlignDown(reinterpret_cast<uint64_t>(Buf), FEXCore::Utils::FEX_PAGE_SIZE);
+  const uint64_t Last = reinterpret_cast<uint64_t>(Buf) + Length - 1 < reinterpret_cast<uint64_t>(Buf) ?
+                          UINT64_MAX :
+                          reinterpret_cast<uint64_t>(Buf) + Length - 1;
+  // Exclusive page-aligned end; the last page of the address space is never guest memory.
+  const uint64_t End = FEXCore::AlignDown(Last, FEXCore::Utils::FEX_PAGE_SIZE) + (Last >= UINT64_MAX - FEXCore::Utils::FEX_PAGE_SIZE ? 0 : FEXCore::Utils::FEX_PAGE_SIZE);
+
+  auto lk = FEXCore::GuardSignalDeferringSection<std::shared_lock>(VMATracking.Mutex, Thread);
+
+  // upper_bound gives the first VMA starting after Start; the one before it may still contain Start.
+  auto Entry = VMATracking.VMAs.upper_bound(Start);
+  if (Entry != VMATracking.VMAs.begin() && std::prev(Entry)->first + std::prev(Entry)->second.Length > Start) {
+    --Entry;
+  }
+
+  for (; Entry != VMATracking.VMAs.end() && Entry->first < End; ++Entry) {
+    const auto& Mapping = Entry->second;
+    // The kernel's answer is the real one for memory the guest cannot write; private non-executable memory never
+    // holds translated code.
+    if (!Mapping.Prot.Writable || !(Mapping.Prot.Executable || Mapping.Flags.Shared)) [[likely]] {
+      continue;
+    }
+    const uint64_t From = std::max(Start, Entry->first);
+    const uint64_t To = std::min(End, Entry->first + Mapping.Length);
+    if (Mapping.Flags.Shared) {
+      // Code may be translated from another mirror of the same pages: flush every mirror, page by page.
+      for (uint64_t Page = From; Page < To; Page += FEXCore::Utils::FEX_PAGE_SIZE) {
+        InvalidateWrittenCodePage(Thread, Page, Entry->first, Mapping);
+      }
+    } else {
+      // One invalidation for the whole range; pages without code (and hot pages, already writable) just stay writable.
+      TM.InvalidateGuestCodeRange(Thread, From, To - From, [](uintptr_t Start, uintptr_t Length) {
+        auto rv = mprotect(reinterpret_cast<void*>(Start), Length, PROT_READ | PROT_WRITE);
+        LogMan::Throw::AFmt(rv == 0, "mprotect({}, {}) failed", Start, Length);
+      });
+    }
   }
 }
 
@@ -395,15 +446,28 @@ uint64_t SyscallHandler::GuestMunmap(bool Is64Bit, FEXCore::Core::InternalThread
     // To be more optimal the frontend should provide this code with a valid Thread object earlier.
     auto lk = FEXCore::GuardSignalDeferringSectionWithFallback(VMATracking.Mutex, Thread);
 
-    if (reinterpret_cast<uintptr_t>(addr) < 0x1'0000'0000ULL) {
+    if (!Is64Bit) {
       Result = Get32BitAllocator()->Munmap(addr, length);
       if (FEX::HLE::HasSyscallError(Result)) {
         return Result;
       }
     } else {
+      // The host address space is larger than x86-64's: a range Linux rejects (mm/vma.c do_vmi_munmap, end past
+      // TASK_SIZE) would reach FEX's own mappings above it.
+      // TASK_SIZE_MAX with 4-level paging (arch/x86/include/asm/page_64_types.h).
+      constexpr uint64_t X86_64TaskSizeMax = (1ULL << 47) - FEXCore::Utils::FEX_PAGE_SIZE;
+      const uint64_t Addr = reinterpret_cast<uint64_t>(addr);
+      if (Addr > X86_64TaskSizeMax || Size > X86_64TaskSizeMax - Addr || (length != 0 && Size == 0)) {
+        return -EINVAL;
+      }
+      // An x86-64 range is not confined to either side of 4GB and may be mostly holes: the kernel takes all of it.
       Result = ::munmap(addr, length);
       if (Result == -1) {
         return -errno;
+      }
+      if (reinterpret_cast<uintptr_t>(addr) < 0x1'0000'0000ULL) {
+        // MAP_32BIT mappings come from the 32-bit allocator, which has to learn that their pages are free again.
+        Get32BitAllocator()->TrackUnmapped(addr, length);
       }
     }
     TrackMunmap(Thread, addr, length);

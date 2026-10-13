@@ -289,8 +289,19 @@ public:
 
   ///// VMA (Virtual Memory Area) tracking /////
   static bool HandleSegfault(FEXCore::Core::InternalThreadState* Thread, int Signal, void* info, void* ucontext);
+  static void InvalidateWrittenCodePage(FEXCore::Core::InternalThreadState* Thread, uint64_t FaultBase, uint64_t EntryBase,
+                                        const FEX::HLE::VMATracking::VMAEntry& Mapping);
   void MarkGuestExecutableRange(FEXCore::Core::InternalThreadState* Thread, uint64_t Start, uint64_t Length) override;
   bool IsSMCHotPage(uint64_t Address) override;
+
+  // SMCChecks=mtrack write-protects pages that hold translated code and relies on SIGSEGV to notice a write. A host
+  // syscall that writes guest memory cannot raise that signal: the kernel returns EFAULT, or a short count that ends
+  // at the protected page (issue #5874). Call this before a read-like syscall that fills [Buf, Buf + Length): it
+  // invalidates the translated code in the part of the range that the guest may write and that can hold code (a
+  // writable guest-executable mapping, or a writable mirror of a shared one) and makes it writable again, exactly
+  // as a guest store would. The syscall itself then runs once, unchanged.
+  // Cost when unused: the SMCChecks compare and, for a buffer in a non-executable private mapping, one VMA lookup.
+  void PrepareGuestBufferForKernelWrite(FEXCore::Core::InternalThreadState* Thread, const void* Buf, size_t Length);
   void InvalidateGuestCodeRange(FEXCore::Core::InternalThreadState* Thread, uint64_t Start, uint64_t Length) override;
   std::optional<FEXCore::ExecutableFileSectionInfo>
   LookupExecutableFileSection(FEXCore::Core::InternalThreadState* Thread, uint64_t GuestAddr) final override;
@@ -609,11 +620,16 @@ uint64_t GetDentsEmulation(int fd, T* dirp, uint32_t count);
 namespace FaultSafeUserMemAccess {
   // These are little helper functions for cases when FEX needs to copy data to or from the application in a robust fashion.
   // CopyFromUser and CopyToUser are memcpy routines that expect to safely SIGSEGV when reading or writing application memory respectively.
-  // Returns zero if the memcpy completed, or crashes with SIGABRT and a log message if it faults.
+  // Returns zero if the memcpy completed, or EFAULT if the application memory faulted (Linux's copy_{from,to}_user).
   [[nodiscard]]
   size_t CopyFromUser(void* Dest, const void* Src, size_t Size);
   [[nodiscard]]
   size_t CopyToUser(void* Dest, const void* Src, size_t Size);
+
+  // Returns false if reading the null-terminated string faults, so the syscall can return -EFAULT before FEX parses
+  // it (Linux's strncpy_from_user). A null pointer counts as readable: the host syscall reports it.
+  [[nodiscard]]
+  bool IsStringReadable(const char* Src);
 #if defined(ASSERTIONS_ENABLED) && ASSERTIONS_ENABLED && defined(ARCHITECTURE_arm64)
   // These helpers just check if the user pointer is readable and writable.
   // This is useful in an assert build that can be safely sprinkled through the syscall handler without overhead in release builds.
