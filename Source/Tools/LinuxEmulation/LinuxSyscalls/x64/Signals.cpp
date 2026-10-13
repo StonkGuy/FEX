@@ -25,10 +25,19 @@ void RegisterSignals(FEX::HLE::SyscallHandler* Handler) {
       if (sigsetsize != 8) {
         return -EINVAL;
       }
-      FaultSafeUserMemAccess::VerifyIsReadableOrNull(act, sizeof(GuestSigAction));
-      FaultSafeUserMemAccess::VerifyIsWritableOrNull(oldact, sizeof(GuestSigAction));
+      // Like Linux: the new action is copied in before anything changes, the old one copied out afterwards.
+      GuestSigAction NewAct;
+      GuestSigAction OldAct;
+      if (act && FaultSafeUserMemAccess::CopyFromUser(&NewAct, act, sizeof(NewAct))) {
+        return -EFAULT;
+      }
 
-      return FEX::HLE::_SyscallHandler->GetSignalDelegator()->RegisterGuestSignalHandler(signum, act, oldact);
+      uint64_t Result = FEX::HLE::_SyscallHandler->GetSignalDelegator()->RegisterGuestSignalHandler(signum, act ? &NewAct : nullptr,
+                                                                                                      oldact ? &OldAct : nullptr);
+      if (Result == 0 && oldact && FaultSafeUserMemAccess::CopyToUser(oldact, &OldAct, sizeof(OldAct))) {
+        return -EFAULT;
+      }
+      return Result;
     });
 
   REGISTER_SYSCALL_IMPL_X64(
