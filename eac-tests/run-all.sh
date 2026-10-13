@@ -21,6 +21,7 @@ seccomp-trap        seccomp_trap_test           PASS FEX_NEEDSSECCOMP=1
 seccomp-trap-noexec seccomp_trap_noexec_test    PASS FEX_NEEDSSECCOMP=1
 seccomp-trap-blocked seccomp_trap_blocked_test  PASS FEX_NEEDSSECCOMP=1
 signal-race         seccomp_signal_race_test    PASS FEX_NEEDSSECCOMP=1
+execve-seccomp      execve_seccomp_test         PASS FEX_NEEDSSECCOMP=1
 cpuid-fault         cpuid_fault_test            PASS -
 proc-status         proc_status_test            PASS -
 proc-maps           proc_maps_test              PASS -
