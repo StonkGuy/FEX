@@ -40,6 +40,7 @@ eac-tests/<name>/build.sh native [output]    # where supported: built with the h
 | `seccomp-trap-blocked` | A trapped syscall is never executed, and a blocked or ignored SIGSYS is forced like Linux does (`force_sig_seccomp`): the process dies from SIGSYS. Run with `FEX_NEEDSSECCOMP=1`. | 0036 |
 | `signal-race` | A thread looping trapped syscalls while another hammers it with SIGUSR1 can still be stopped (the shape of Wine's `NtGetContextThread`). Run with `FEX_NEEDSSECCOMP=1`. | 0010, 0022 |
 | `cpuid-fault` | `arch_prctl(ARCH_SET_CPUID/ARCH_GET_CPUID)`: a CPUID faults as SIGSEGV/`SI_KERNEL` while disabled. Re-execs itself with `FEX_ENABLECPUIDFAULTING=1`. A host CPU without `cpuid_fault` reports SKIP natively. | 0011 |
+| `smc-hot-page` | A code page written all the time (data next to code, code rewritten in place, a memfd mirror) keeps running the right code; per loop, the SMC write faults stay within `FEX_SMCHOTPAGEFAULTS`. Run a second time with `FEX_SMCHOTPAGEFAULTS=0` as the negative control (expected FAIL). | 0002 |
 | `ptrace-dregs` | Debug registers through `PTRACE_PEEKUSER`/`POKEUSER`, with the kernel's validation and error codes. | 0012 |
 | `proc-status` | `Seccomp:` and `TracerPid:` in `/proc/self/status`. Re-execs itself with `FEX_NEEDSSECCOMP=1`. | 0013 |
 | `sigtrace-unlink` | `FEX_SIGNALTRACE=1` ring `/dev/shm/fex-<pid>-sigtrace` exists while the process runs and is gone after a normal exit. Re-execs itself with the option. | 0007 |
