@@ -29,6 +29,7 @@ smc-remote-write    smc_remote_write_test       PASS -
 smc-same-page       smc_same_page_test          PASS -
 smc-same-page       smc_same_page_test          PASS FEX_SMCHOTPAGEFAULTS=0
 munmap-4g           munmap_4g_test              PASS -
+smc-kernel-write    smc_kernel_write_test       PASS -
 smc-hot-page        smc_hot_page_test           PASS -
 smc-hot-page        smc_hot_page_test           FAIL FEX_SMCHOTPAGEFAULTS=0
 ptrace-dregs        ptrace_dregs_test           PASS -
