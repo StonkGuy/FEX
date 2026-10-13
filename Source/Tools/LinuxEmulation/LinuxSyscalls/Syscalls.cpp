@@ -452,9 +452,10 @@ uint64_t ExecveHandler(FEXCore::Core::CpuStateFrame* Frame, const char* pathname
 
     // It is valid to provide nullptr first argument.
     if (*OldArgv) {
-      // The direct fallback uses the executable path as argv[0]. An FD-backed load uses the
-      // binfmt preserve-argv0 layout, so the caller-supplied argv[0] has to stay in the vector.
-      if (!NeedsLoaderFD) {
+      // The direct fallback uses the executable path as argv[0]. An FD-backed load (an FD execveat or
+      // the path-backed loader FD) uses the binfmt preserve-argv0 layout, so the caller-supplied
+      // argv[0] has to stay in the vector.
+      if (!IsFDExec && !NeedsLoaderFD) {
         ++OldArgv;
       }
       while (*OldArgv) {
