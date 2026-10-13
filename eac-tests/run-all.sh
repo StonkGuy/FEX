@@ -28,6 +28,7 @@ sigtrace-unlink     sigtrace_unlink_test        PASS -
 smc-remote-write    smc_remote_write_test       PASS -
 smc-same-page       smc_same_page_test          PASS -
 smc-same-page       smc_same_page_test          PASS FEX_SMCHOTPAGEFAULTS=0
+smc-kernel-write    smc_kernel_write_test       PASS -
 smc-hot-page        smc_hot_page_test           PASS -
 smc-hot-page        smc_hot_page_test           FAIL FEX_SMCHOTPAGEFAULTS=0
 ptrace-dregs        ptrace_dregs_test           PASS -
