@@ -35,9 +35,12 @@ using cap_user_header_t = void*;
 using cap_user_data_t = void*;
 
 void RegisterInfo(FEX::HLE::SyscallHandler* Handler) {
-  REGISTER_SYSCALL_IMPL(uname, [](FEXCore::Core::CpuStateFrame* Frame, struct utsname* buf) -> uint64_t {
+  REGISTER_SYSCALL_IMPL(uname, [](FEXCore::Core::CpuStateFrame* Frame, struct utsname* ubuf) -> uint64_t {
     auto Thread = FEX::HLE::ThreadManager::GetStateObjectFromCPUState(Frame);
 
+    // Built here and copied out at once, so a bad buffer gives -EFAULT like Linux.
+    struct utsname Out {};
+    auto buf = &Out;
     struct utsname Local {};
     if (::uname(&Local) == 0) {
       memcpy(buf->nodename, Local.nodename, sizeof(Local.nodename));
@@ -66,6 +69,9 @@ void RegisterInfo(FEX::HLE::SyscallHandler* Handler) {
     } else {
       // Tell the guest that we are a 64bit kernel
       strcpy(buf->machine, "x86_64");
+    }
+    if (FaultSafeUserMemAccess::CopyToUser(ubuf, &Out, sizeof(Out))) {
+      return -EFAULT;
     }
     return 0;
   });

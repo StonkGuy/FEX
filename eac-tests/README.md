@@ -38,12 +38,18 @@ eac-tests/<name>/build.sh native [output]    # where supported: built with the h
 | `seccomp-trap` | Wine's `SECCOMP_RET_TRAP`/SIGSYS path: `si_code`/`si_syscall`/`si_arch`/`si_call_addr`, the six arguments in the ucontext, a RAX written by the handler resumes the caller; 1000 repetitions. Run with `FEX_NEEDSSECCOMP=1`. | 0010 |
 | `seccomp-trap-noexec` | A trapped syscall is never executed (a trapped `uname()` leaves its buffer untouched). Run with `FEX_NEEDSSECCOMP=1`. | 0010 |
 | `seccomp-trap-blocked` | A trapped syscall is never executed, and a blocked or ignored SIGSYS is forced like Linux does (`force_sig_seccomp`): the process dies from SIGSYS. Run with `FEX_NEEDSSECCOMP=1`. | 0036 |
+| `execve-seccomp` | With a seccomp filter installed, a path `execve` of an ELF and of a `#!` script and an `execveat` of an FD (with and without `FD_CLOEXEC`) start the new program with the filter, the inherited FDs and no FD_CLOEXEC FD. Run with `FEX_NEEDSSECCOMP=1`. | 0038 |
 | `signal-race` | A thread looping trapped syscalls while another hammers it with SIGUSR1 can still be stopped (the shape of Wine's `NtGetContextThread`). Run with `FEX_NEEDSSECCOMP=1`. | 0010, 0022 |
 | `fdexec-argv` | `fexecve()` (`execveat(fd, "", AT_EMPTY_PATH)`), the same with an `FD_CLOEXEC` fd, `execve("/proc/self/fd/N")` and a path `execve` pass argv (including argv[0]) and envp unchanged. Run with and without FEX's binfmt_misc registration. | 0039 |
 | `cpuid-fault` | `arch_prctl(ARCH_SET_CPUID/ARCH_GET_CPUID)`: a CPUID faults as SIGSEGV/`SI_KERNEL` while disabled. Re-execs itself with `FEX_ENABLECPUIDFAULTING=1`. A host CPU without `cpuid_fault` reports SKIP natively. | 0011 |
+| `munmap-4g` | x86-64 munmap across 4 GiB, with holes, at the 4 GiB boundary, MAP_32BIT reuse, overflowing lengths. | #5847 |
+| `smc-kernel-write` | read, pread64, recvfrom (file, pipe, stream, datagram) into a page that holds translated code fill it as Linux does; mirrors, partial and EFAULT cases. | #5874 |
+| `smc-hot-page` | A code page written all the time (data next to code, code rewritten in place, a memfd mirror) keeps running the right code; per loop, the SMC write faults stay within `FEX_SMCHOTPAGEFAULTS`. Run a second time with `FEX_SMCHOTPAGEFAULTS=0` as the negative control (expected FAIL). | 0002 |
 | `ptrace-dregs` | Debug registers through `PTRACE_PEEKUSER`/`POKEUSER`, with the kernel's validation and error codes. | 0012 |
 | `proc-status` | `Seccomp:` and `TracerPid:` in `/proc/self/status`. Re-execs itself with `FEX_NEEDSSECCOMP=1`. | 0013 |
+| `sigtrace-unlink` | `FEX_SIGNALTRACE=1` ring `/dev/shm/fex-<pid>-sigtrace` exists while the process runs and is gone after a normal exit. Re-execs itself with the option. | 0007 |
 | `ptrace-regsets` | `PTRACE_GETREGSET`/`SETREGSET`: `NT_PRSTATUS`, `NT_X86_XSTATE`, `-EINVAL` for an unknown type. | 0014 |
+| `ptrace-sigbus` | A tracer sees no SIGBUS stop for unaligned atomics (FEX's own `BUS_ADRALN` on arm64), and still sees the tracee's real SIGBUS (`BUS_ADRERR`). | 0039 |
 | `restart-syscall` | `restart_syscall` returns `-EINTR` and the process survives. | 0015 |
 | `signal-frame` | The signal frame against what Linux writes: TF single-step, CS/SS `0x33`/`0x2b`, the XSAVE fpstate trailer (run a second time with `FEX_HOSTFEATURES=disableavx` for the FXSAVE frame), `ud2` → `ILL_ILLOPN`, `uc_sigmask`, a frame that does not fit the stack. | 0016–0020 |
 | `sigreturn-eflags` | `rt_sigreturn` applies EFLAGS a handler wrote (DF; TF starts single-stepping with exactly one SIGTRAP). | 0016 |
@@ -52,6 +58,8 @@ eac-tests/<name>/build.sh native [output]    # where supported: built with the h
 | `proc-maps` | `/proc/self/maps` lists only x86-64 process mappings: everything below `TASK_SIZE_MAX` except `[vsyscall]`, every file-backed ELF mapping x86-64. | 0033 |
 | `smc-remote-write` | A code page the guest made RWX (and executed from again) can be written by another process with `process_vm_writev` (Wine's `NtWriteVirtualMemory`), and the new code runs. | 0035 |
 | `smc-same-page` | Code that rewrites instructions on its own page (ahead of and behind the writer, in and outside the executing block, 1 to 16 bytes, with and without a jump or CPUID in between, across a page boundary, with the stack on the page) runs the new code every time and never hangs; then the same while a second thread keeps translating code from that page. Run also with `FEX_SMCHOTPAGEFAULTS=0`. | 0037 |
+| `syscall-efault` | 51 system-call cases given a pointer into a `PROT_NONE` page (or a structure running into one) return `-EFAULT` and the caller survives. Run with `FEX_NEEDSSECCOMP=1` (the seccomp case). | 3942 fix |
+| `sigreturn-syscallinfo` | Signal frames stay below the live stack after earlier handlers returned normally through `rt_sigreturn` (worker with a 12-deep patterned call chain, SIGUSR1 every 20 us, 100000 signals). | 5901 fix |
 | `pop-fault` | A faulting `pop` to memory leaves RSP unchanged. Its patch (0021) is withdrawn, so it is **expected to fail** on this branch. | — |
 | `bench` | Not a pass/fail test: micro-benchmarks for code-churn invalidation (`EXTRA="-DINVAL_MODE=1 -DINVAL_THREADS=190"`) and the self-modifying-code modes; `tso_probe.c` is an ordinary Arm64 program printing the TSO `prctl` state. | 0002, 0004 |
 
@@ -60,6 +68,7 @@ Expected results (same binaries on all three):
 | test | native x86-64 | stock FEX-2610 | eac-2610 |
 |---|---|---|---|
 | `ptrace-inject` | PASS | hang (timeout) | PASS |
+| `ptrace-sigbus` | not run yet | not run | PASS (FAIL on `eac-2610` before 0039) |
 | `signal-mask`, `signal-regs`, `signal-race`, `cpuid-fault`, `proc-status`, `ptrace-regsets`, `ptrace-dregs`, `signal-frame`, `sigreturn-eflags`, `tf-iret` | PASS | FAIL | PASS |
 | `proc-maps` | PASS (x86-64, kernel 6.19) | FAIL | PASS |
 | `smc-remote-write` | PASS (x86-64, kernel 6.19) | FAIL | PASS |
@@ -67,6 +76,7 @@ Expected results (same binaries on all three):
 | `seccomp-trap`, `seccomp-trap-noexec` | PASS | SIGSEGV | PASS |
 | `seccomp-trap-blocked` | PASS | not run | PASS (FAIL on `eac-2610.2`) |
 | `fdexec-argv` | PASS | FAIL (FD cases without binfmt_misc, FD_CLOEXEC case with it) | PASS |
+| `execve-seccomp` | PASS | FAIL (the `#!` case) | PASS |
 | `restart-syscall` | PASS | SIGILL | PASS |
 | `maps-probe` | PASS | hang (timeout) | PASS |
 | `pop-fault` | PASS | FAIL | FAIL (withdrawn 0021) |

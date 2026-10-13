@@ -788,6 +788,7 @@ void RegisterFD(FEX::HLE::SyscallHandler* Handler) {
   REGISTER_SYSCALL_IMPL_X32(
     pread_64, [](FEXCore::Core::CpuStateFrame* Frame, int fd, void* buf, uint32_t count, uint32_t offset_low, uint32_t offset_high) -> uint64_t {
       uint64_t Offset = (uint64_t(offset_high) << 32) | offset_low;
+      FEX::HLE::_SyscallHandler->PrepareGuestBufferForKernelWrite(Frame->Thread, buf, count);
       uint64_t Result = ::pread64(fd, buf, count, Offset);
       SYSCALL_ERRNO();
     });
