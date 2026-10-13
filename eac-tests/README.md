@@ -39,6 +39,7 @@ eac-tests/<name>/build.sh native [output]    # where supported: built with the h
 | `seccomp-trap-noexec` | A trapped syscall is never executed (a trapped `uname()` leaves its buffer untouched). Run with `FEX_NEEDSSECCOMP=1`. | 0010 |
 | `seccomp-trap-blocked` | A trapped syscall is never executed, and a blocked or ignored SIGSYS is forced like Linux does (`force_sig_seccomp`): the process dies from SIGSYS. Run with `FEX_NEEDSSECCOMP=1`. | 0036 |
 | `signal-race` | A thread looping trapped syscalls while another hammers it with SIGUSR1 can still be stopped (the shape of Wine's `NtGetContextThread`). Run with `FEX_NEEDSSECCOMP=1`. | 0010, 0022 |
+| `fdexec-argv` | `fexecve()` (`execveat(fd, "", AT_EMPTY_PATH)`), the same with an `FD_CLOEXEC` fd, `execve("/proc/self/fd/N")` and a path `execve` pass argv (including argv[0]) and envp unchanged. Run with and without FEX's binfmt_misc registration. | 0039 |
 | `cpuid-fault` | `arch_prctl(ARCH_SET_CPUID/ARCH_GET_CPUID)`: a CPUID faults as SIGSEGV/`SI_KERNEL` while disabled. Re-execs itself with `FEX_ENABLECPUIDFAULTING=1`. A host CPU without `cpuid_fault` reports SKIP natively. | 0011 |
 | `ptrace-dregs` | Debug registers through `PTRACE_PEEKUSER`/`POKEUSER`, with the kernel's validation and error codes. | 0012 |
 | `proc-status` | `Seccomp:` and `TracerPid:` in `/proc/self/status`. Re-execs itself with `FEX_NEEDSSECCOMP=1`. | 0013 |
@@ -65,6 +66,7 @@ Expected results (same binaries on all three):
 | `smc-same-page` | PASS (x86-64, kernel 6.19) | not run (same code as eac-2610 before 0037, which fails the `+thread` cases) | PASS |
 | `seccomp-trap`, `seccomp-trap-noexec` | PASS | SIGSEGV | PASS |
 | `seccomp-trap-blocked` | PASS | not run | PASS (FAIL on `eac-2610.2`) |
+| `fdexec-argv` | PASS | FAIL (FD cases without binfmt_misc, FD_CLOEXEC case with it) | PASS |
 | `restart-syscall` | PASS | SIGILL | PASS |
 | `maps-probe` | PASS | hang (timeout) | PASS |
 | `pop-fault` | PASS | FAIL | FAIL (withdrawn 0021) |
