@@ -8,6 +8,7 @@ $end_info$
 #include "CodeLoader.h"
 
 #include "LinuxSyscalls/SignalDelegator.h"
+#include "LinuxSyscalls/SignalTrace.h"
 #include "LinuxSyscalls/Syscalls.h"
 #include "LinuxSyscalls/Syscalls/Thread.h"
 #include "LinuxSyscalls/x64/Syscalls.h"
@@ -535,12 +536,10 @@ void RegisterThread(FEX::HLE::SyscallHandler* Handler) {
       Result = 0;
       break;
     case 0x1003: // ARCH_GET_FS
-      *reinterpret_cast<uint64_t*>(addr) = Frame->State.fs_cached;
-      Result = 0;
+      Result = FaultSafeUserMemAccess::CopyToUser(reinterpret_cast<uint64_t*>(addr), &Frame->State.fs_cached, sizeof(uint64_t)) ? -EFAULT : 0;
       break;
     case 0x1004: // ARCH_GET_GS
-      *reinterpret_cast<uint64_t*>(addr) = Frame->State.gs_cached;
-      Result = 0;
+      Result = FaultSafeUserMemAccess::CopyToUser(reinterpret_cast<uint64_t*>(addr), &Frame->State.gs_cached, sizeof(uint64_t)) ? -EFAULT : 0;
       break;
     case 0x3001:        // ARCH_CET_STATUS
       Result = -EINVAL; // We don't support CET, return EINVAL
@@ -577,6 +576,7 @@ void RegisterThread(FEX::HLE::SyscallHandler* Handler) {
     // Save telemetry if we're exiting.
     FEX::HLE::_SyscallHandler->GetSignalDelegator()->SaveTelemetry();
     FEX::HLE::_SyscallHandler->TM.CleanupForExit();
+    FEX::HLE::SigTrace::CleanupForExit();
 
     syscall(SYSCALL_DEF(exit_group), status);
     // This will never be reached
