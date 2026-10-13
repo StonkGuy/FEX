@@ -672,6 +672,20 @@ bool FixupWaitStatus(pid_t Pid, int* Status) {
     return true;
   }
 
+  // On arm64 FEX also takes a host SIGBUS (BUS_ADRALN) for an unaligned atomic or exclusive access in JIT code and
+  // emulates the access in its handler (SigbusHandler in SignalDelegator.cpp); the guest never sees it. x86-64 user code
+  // has no such fault, so a BUS_ADRALN stop of a FEX tracee is always FEX's own. Code that does many such accesses (the
+  // Easy Anti-Cheat client while it initialises in the game process) otherwise shows its tracer a stream of SIGBUS
+  // stops; the launcher passes each one back and gives up after 1000 with "Unexpected error. (#2)". Any other SIGBUS
+  // (BUS_ADRERR from a mapping past the end of its file, ...) is the guest's and stays visible.
+  if ((St >> 16) == 0 && WSTOPSIG(St) == SIGBUS && IsFexTracee(Pid)) {
+    siginfo_t Info {};
+    if (HostPtrace(PTRACE_GETSIGINFO, Pid, nullptr, &Info) == 0 && Info.si_code == BUS_ADRALN) {
+      HostPtrace(PTRACE_CONT, Pid, nullptr, reinterpret_cast<void*>(static_cast<uintptr_t>(SIGBUS)));
+      return true;
+    }
+  }
+
   if ((St >> 16) == 0 && WSTOPSIG(St) == SIGPROF && IsFexTracee(Pid)) {
     // FEX's own sampling profiler signal: never visible to the guest tracer.
     HostPtrace(PTRACE_CONT, Pid, nullptr, nullptr);
