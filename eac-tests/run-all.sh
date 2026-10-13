@@ -11,6 +11,7 @@ CC=${CC:-clang}; OUT=${OUT:-$HERE/build}; TIMEOUT=${TIMEOUT:-60}
 mkdir -p "$OUT"; bad=0
 
 # name  binary  expected  env
+# smc-hot-page with FEX_SMCHOTPAGEFAULTS=0 is the negative control: every store faults, so it FAILs under FEX.
 # pop-fault needs the withdrawn patch 0021 and is expected to FAIL on this branch (it passes natively).
 TESTS='
 ptrace-inject       ptrace_inject_test          PASS -
@@ -27,6 +28,8 @@ sigtrace-unlink     sigtrace_unlink_test        PASS -
 smc-remote-write    smc_remote_write_test       PASS -
 smc-same-page       smc_same_page_test          PASS -
 smc-same-page       smc_same_page_test          PASS FEX_SMCHOTPAGEFAULTS=0
+smc-hot-page        smc_hot_page_test           PASS -
+smc-hot-page        smc_hot_page_test           FAIL FEX_SMCHOTPAGEFAULTS=0
 ptrace-dregs        ptrace_dregs_test           PASS -
 ptrace-regsets      ptrace_regsets_test         PASS -
 restart-syscall     restart_syscall_test        PASS -
