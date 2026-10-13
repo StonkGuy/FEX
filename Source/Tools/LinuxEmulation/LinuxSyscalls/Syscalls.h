@@ -620,11 +620,16 @@ uint64_t GetDentsEmulation(int fd, T* dirp, uint32_t count);
 namespace FaultSafeUserMemAccess {
   // These are little helper functions for cases when FEX needs to copy data to or from the application in a robust fashion.
   // CopyFromUser and CopyToUser are memcpy routines that expect to safely SIGSEGV when reading or writing application memory respectively.
-  // Returns zero if the memcpy completed, or crashes with SIGABRT and a log message if it faults.
+  // Returns zero if the memcpy completed, or EFAULT if the application memory faulted (Linux's copy_{from,to}_user).
   [[nodiscard]]
   size_t CopyFromUser(void* Dest, const void* Src, size_t Size);
   [[nodiscard]]
   size_t CopyToUser(void* Dest, const void* Src, size_t Size);
+
+  // Returns false if reading the null-terminated string faults, so the syscall can return -EFAULT before FEX parses
+  // it (Linux's strncpy_from_user). A null pointer counts as readable: the host syscall reports it.
+  [[nodiscard]]
+  bool IsStringReadable(const char* Src);
 #if defined(ASSERTIONS_ENABLED) && ASSERTIONS_ENABLED && defined(ARCHITECTURE_arm64)
   // These helpers just check if the user pointer is readable and writable.
   // This is useful in an assert build that can be safely sprinkled through the syscall handler without overhead in release builds.
