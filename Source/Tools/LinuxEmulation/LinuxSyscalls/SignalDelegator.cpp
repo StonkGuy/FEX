@@ -186,6 +186,7 @@ ArchHelpers::Context::ContextBackup* SignalDelegator::StoreThreadState(FEXCore::
 }
 
 static void CheckForPendingSignals(const FEX::HLE::ThreadStateObject* Thread);
+static bool IsFaultClassException(const FEXCore::Core::CpuStateFrame* Frame, bool GeneratedException, int Signal, const siginfo_t* HostSigInfo);
 
 void SignalDelegator::RestoreThreadState(FEXCore::Core::InternalThreadState* Thread, void* ucontext, RestoreType Type) {
   uint64_t OldSP {};
@@ -423,6 +424,9 @@ bool SignalDelegator::HandleDispatcherGuestSignal(FEXCore::Core::InternalThreadS
 
   ContextBackup->OriginalRIP = Thread->CurrentFrame->State.rip;
   uint32_t eflags = CTX->ReconstructCompactedEFLAGS(Thread, false, nullptr, 0);
+  if (IsFaultClassException(Frame, ContextBackup->FaultToTopAndGeneratedException, Signal, HostSigInfo)) {
+    eflags |= 1U << FEXCore::X86State::RFLAG_RF_LOC;
+  }
 
   if (Is64BitMode) {
     NewGuestSP = SetupFrame_x64(Thread, ContextBackup, Frame, Signal, HostSigInfo, ucontext, GuestAction, GuestStack, NewGuestSP, eflags);
@@ -589,6 +593,24 @@ void SignalDelegator::SignalThread(FEXCore::Core::InternalThreadState* Thread, S
 }
 
 /**  @} */
+
+// For a fault-class exception the CPU pushes an EFLAGS image with RF (resume flag) set, so that returning to the faulting
+// instruction does not raise an instruction breakpoint on it again; Linux puts that image into the signal frame unchanged
+// (a SIGSEGV from a page fault shows RF = 1 in uc_mcontext). Traps (#DB, #BP, #OF) and asynchronous signals push RF = 0.
+// FEX's running RF is always 0, so the frame gets it here. Only computed while a guest frame is being built.
+static bool IsFaultClassException(const FEXCore::Core::CpuStateFrame* Frame, bool GeneratedException, int Signal, const siginfo_t* HostSigInfo) {
+  if (GeneratedException) {
+    switch (Frame->SynchronousFaultData.TrapNo) {
+    case FEXCore::X86State::X86_TRAPNO_DB:
+    case FEXCore::X86State::X86_TRAPNO_BP:
+    case FEXCore::X86State::X86_TRAPNO_OF: return false;
+    default: return true;
+    }
+  }
+
+  // A guest memory access that faulted on the host: a #PF for the guest.
+  return (Signal == SIGSEGV || Signal == SIGBUS) && HostSigInfo->si_code > SI_USER && HostSigInfo->si_code < SI_KERNEL;
+}
 
 static bool IsAsyncSignal(const siginfo_t* Info, int Signal) {
   if (Info->si_code <= SI_USER) {
