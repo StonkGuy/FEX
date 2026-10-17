@@ -1,0 +1,42 @@
+name: FEX unittests before/after (ASM + InstCountCI)
+
+on:
+  push:
+    branches: [ ci/insn-diff ]
+
+jobs:
+  unittests:
+    runs-on: ubuntu-24.04-arm
+    strategy: { fail-fast: false, matrix: { ref: [ eac-2610, fix-div-de ] } }
+    steps:
+    - uses: actions/checkout@v4
+      with: { ref: "${{ matrix.ref }}", submodules: recursive }
+    - name: Tools
+      run: sudo apt-get update -qq && sudo apt-get install -y -qq clang lld ninja-build cmake python3 nasm >/dev/null
+    - name: Build
+      run: |
+        git log --oneline -1
+        cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+          -DBUILD_TESTING=ON -DBUILD_THUNKS=OFF -DBUILD_FEXCONFIG=OFF -DENABLE_LTO=OFF -DENABLE_ASSERTIONS=ON \
+          -DENABLE_VIXL_DISASSEMBLER=ON -DCMAKE_CXX_SCAN_FOR_MODULES=OFF -DUSE_LINKER=lld >/dev/null
+        set -o pipefail; cmake --build build -j$(nproc) 2>&1 | tail -2
+    - name: ASM tests (64-bit)
+      run: |
+        set +e; cd build
+        ctest -j$(nproc) --timeout 60 -R "Test_64Bit_" > ../asm.txt 2>&1; echo "rc=$?" >> ../asm.txt
+        grep -E "tests passed|\(Failed\)|\(Timeout\)|Exception" ../asm.txt | tail -60
+    - name: InstCountCI
+      run: |
+        set +e; cd build
+        ctest -j$(nproc) --timeout 302 -R "InstCountCI/.*instcountci$" > ../icount.txt 2>&1; echo "rc=$?" >> ../icount.txt
+        grep -E "tests passed|Failed" ../icount.txt | tail -20
+        ctest -j$(nproc) -R "InstCountCI/.*new_numbers$" > /dev/null 2>&1
+        cd .. && git diff > icount.diff; git diff --stat
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: "unittests-${{ matrix.ref }}"
+        path: |
+          asm.txt
+          icount.txt
+          icount.diff
