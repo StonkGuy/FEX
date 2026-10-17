@@ -14,10 +14,12 @@ namespace Core {
     FAULT_SIGSEGV = SIGSEGV,
     FAULT_SIGTRAP = SIGTRAP,
     FAULT_SIGILL = SIGILL,
+    FAULT_SIGFPE = SIGFPE,
 #else
     FAULT_SIGSEGV = 11,
     FAULT_SIGTRAP = 5,
     FAULT_SIGILL = 4,
+    FAULT_SIGFPE = 8,
 #endif
   };
 } // namespace Core
