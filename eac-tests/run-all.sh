@@ -46,6 +46,7 @@ tf-iret             tf_iret_test                PASS -
 syscall-efault      syscall_efault_test         PASS FEX_NEEDSSECCOMP=1
 sigreturn-syscallinfo sigreturn_syscallinfo_test PASS -
 pop-fault           pop_fault_test              FAIL -
+div-fault           div_fault_test              PASS -
 '
 
 echo "$TESTS" | while read -r name bin expect envs; do

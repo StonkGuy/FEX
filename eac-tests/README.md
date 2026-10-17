@@ -60,6 +60,7 @@ eac-tests/<name>/build.sh native [output]    # where supported: built with the h
 | `smc-same-page` | Code that rewrites instructions on its own page (ahead of and behind the writer, in and outside the executing block, 1 to 16 bytes, with and without a jump or CPUID in between, across a page boundary, with the stack on the page) runs the new code every time and never hangs; then the same while a second thread keeps translating code from that page. Run also with `FEX_SMCHOTPAGEFAULTS=0`. | 0037 |
 | `syscall-efault` | 51 system-call cases given a pointer into a `PROT_NONE` page (or a structure running into one) return `-EFAULT` and the caller survives. Run with `FEX_NEEDSSECCOMP=1` (the seccomp case). | 3942 fix |
 | `sigreturn-syscallinfo` | Signal frames stay below the live stack after earlier handlers returned normally through `rt_sigreturn` (worker with a 12-deep patterned call chain, SIGUSR1 every 20 us, 100000 signals). | 5901 fix |
+| `div-fault` | DIV/IDIV of every width (register, high-byte and memory divisors) raise #DE like x86-64 Linux: zero divisor and quotient overflow give SIGFPE/`FPE_INTDIV`, trapno 0, RIP at the divide, RAX/RDX unchanged; boundary inputs that fit give the exact result. | 0041 |
 | `pop-fault` | A faulting `pop` to memory leaves RSP unchanged. Its patch (0021) is withdrawn, so it is **expected to fail** on this branch. | — |
 | `bench` | Not a pass/fail test: micro-benchmarks for code-churn invalidation (`EXTRA="-DINVAL_MODE=1 -DINVAL_THREADS=190"`) and the self-modifying-code modes; `tso_probe.c` is an ordinary Arm64 program printing the TSO `prctl` state. | 0002, 0004 |
 
@@ -80,6 +81,7 @@ Expected results (same binaries on all three):
 | `restart-syscall` | PASS | SIGILL | PASS |
 | `maps-probe` | PASS | hang (timeout) | PASS |
 | `pop-fault` | PASS | FAIL | FAIL (withdrawn 0021) |
+| `div-fault` | PASS | FAIL (no #DE: zero/truncated quotient) | PASS (FAIL on `eac-2610` before 0041) |
 
 Each test fails without the patch it names: the series was built one patch at a time and each test flips from FAIL to
 PASS at its own patch.
