@@ -182,6 +182,10 @@ static void run(void) {
   expect_result(IDIV8, "idiv r8 127 / 1", M | 0x007f, 0, 0x01, M | 0x007f, 0);
   expect_result(IDIV16, "idiv r16 -32768 / 1", M | 0x8000, M | 0xffff, 1, M | 0x8000, M | 0x0000);
   expect_result(IDIV32, "idiv r32 INT32_MIN / 1", 0xaaaaaaaa80000000ul, 0xbbbbbbbbfffffffful, 1, 0x80000000ul, 0);
+  expect_result(IDIV8, "idiv r8 256 / 4 (dividend not sign-extended)", M | 0x0100, 0, 0x04, M | 0x0040, 0);
+  expect_result(IDIV16, "idiv r16 2^16 / 4 (dividend not sign-extended)", M | 0x0000, M | 0x0001, 4, M | 0x4000, M | 0x0000);
+  expect_result(IDIV32, "idiv r32 2^32 / 4 (dividend not sign-extended)", 0, 1, 4, 0x40000000ul, 0);
+  expect_result(IDIV32, "idiv r32 -2^32 / 4 (dividend not sign-extended)", 0, 0xfffffffful, 4, 0xc0000000ul, 0);
   expect_result(IDIV32, "idiv r32 -7 / 2", 0xfffffff9ul, 0xfffffffful, 2, 0xfffffffdul, 0xfffffffful);
   expect_result(IDIV64, "idiv r64 INT64_MIN / 1", 0x8000000000000000ul, ~0ul, 1, 0x8000000000000000ul, 0);
   expect_result(IDIV64, "idiv r64 -2^63 = -2^64 / 2 (long dividend)", 0, ~0ul, 2, 0x8000000000000000ul, 0);
