@@ -58,7 +58,7 @@ jobs:
         cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
           -DBUILD_TESTING=OFF -DBUILD_THUNKS=OFF -DBUILD_FEXCONFIG=OFF -DENABLE_LTO=OFF -DENABLE_ASSERTIONS=OFF \
           -DCMAKE_CXX_SCAN_FOR_MODULES=OFF -DUSE_LINKER=lld >/dev/null
-        set -o pipefail; cmake --build build -j$(nproc) 2>&1 | tail -2
+        set +e; cmake --build build -j$(nproc) > ../build.log 2>&1; rc=$?; grep -E -A5 "error:|FAILED" ../build.log | head -60; tail -2 ../build.log; exit $rc
     - name: Run under FEX
       run: |
         chmod +x out/insn_diff; lscpu | head -20
