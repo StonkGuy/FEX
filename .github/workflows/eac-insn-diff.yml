@@ -22,6 +22,8 @@ jobs:
         ./build.sh $PWD/out/insn_diff
         grep -m1 "model name" /proc/cpuinfo | tee out/cpu-build.txt
         time ./out/insn_diff $CASES > out/native-a.txt; tail -c 300 out/native-a.txt; wc -l out/native-a.txt
+        sudo apt-get install -y -qq clang lld >/dev/null
+        sh ../div-fault/build.sh clang out/div_fault_test >/dev/null; (./out/div_fault_test; echo "rc=$?") | tee out/div-native.txt
     - uses: actions/upload-artifact@v4
       with: { name: native-a, path: eac-tests/insn-diff/out }
 
@@ -41,9 +43,10 @@ jobs:
   fex:
     needs: build
     runs-on: ubuntu-24.04-arm
+    strategy: { fail-fast: false, matrix: { ref: [ eac-2610, fix-div-de ] } }
     steps:
     - uses: actions/checkout@v4
-      with: { ref: "${{ inputs.fexref || 'eac-2610' }}", submodules: recursive, path: fex }
+      with: { ref: "${{ matrix.ref }}", submodules: recursive, path: fex }
     - uses: actions/download-artifact@v4
       with: { name: native-a, path: out }
     - name: Tools
@@ -58,10 +61,12 @@ jobs:
     - name: Run under FEX
       run: |
         chmod +x out/insn_diff; lscpu | head -20
+        (chmod +x out/div_fault_test; timeout 60 fex/build/Bin/FEX out/div_fault_test; echo "rc=$?") > div-fex.txt 2>&1; cat div-fex.txt
         time fex/build/Bin/FEX out/insn_diff $CASES > fex.txt || echo "rc=$?"; head -2 fex.txt; wc -l fex.txt
+        mkdir -p r && mv fex.txt div-fex.txt r/
     - uses: actions/upload-artifact@v4
       if: always()
-      with: { name: fex, path: fex.txt }
+      with: { name: "fex-${{ matrix.ref }}", path: r }
 
   compare:
     needs: [ build, native2, fex ]
@@ -74,10 +79,14 @@ jobs:
     - run: |
         C=eac-tests/insn-diff/compare.py; J=art/native-a/forms.json; B=art/native-a/insn_diff; chmod +x $B
         for n in art/native-ubuntu-*/*.txt; do echo "##### native-a vs $n"; python3 $C $J art/native-a/native-a.txt $n --examples 1 | head -200; done > report.txt || true
-        echo "##### native-a vs fex" >> report.txt
-        python3 $C $J art/native-a/native-a.txt art/fex/fex.txt --examples 3 --cases-out shows.txt >> report.txt || true
-        echo "##### inputs of the first defined differences" >> report.txt
-        while read f c; do $B show $f $c; done < shows.txt >> report.txt
+        for r in eac-2610 fix-div-de; do
+          echo "##### native-a vs fex $r" >> report.txt
+          python3 $C $J art/native-a/native-a.txt art/fex-$r/fex.txt --examples 3 --cases-out shows-$r.txt >> report.txt || true
+        done
+        echo "##### div-fault: native / eac-2610 / fix-div-de" >> report.txt
+        tail -2 art/native-a/div-native.txt art/fex-*/div-fex.txt >> report.txt
+        echo "##### inputs of the first defined differences (fix-div-de)" >> report.txt
+        while read f c; do $B show $f $c; done < shows-fix-div-de.txt >> report.txt
         grep -A3 "^totals" report.txt
     - uses: actions/upload-artifact@v4
       with: { name: report, path: report.txt }
