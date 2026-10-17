@@ -681,6 +681,14 @@ bool SignalDelegator::HandleFrontendSIGSEGV(FEXCore::Core::InternalThreadState* 
 void SignalDelegator::HandleGuestSignal(FEX::HLE::ThreadStateObject* ThreadObject, int Signal, void* Info, void* UContext) {
   auto Thread = ThreadObject->Thread;
 
+  // A generated exception whose signal has no host trampoline of its own (SIGFPE for #DE) leaves the JIT through the
+  // SIGTRAP one; deliver it as the signal it stands for, with that signal's guest disposition.
+  if (Signal == SIGTRAP && Thread->CurrentFrame->SynchronousFaultData.FaultToTopAndGeneratedException &&
+      Thread->CurrentFrame->SynchronousFaultData.Signal == SIGFPE) {
+    Signal = SIGFPE;
+    static_cast<siginfo_t*>(Info)->si_signo = SIGFPE;
+  }
+
   if (PtraceEmu::TryGuestSignalStop(Thread->CurrentFrame, Signal)) {
     // A ptrace tracer was shown this guest int3/fault as a signal-delivery stop and suppressed it: resume the guest
     // at the (possibly rewritten) register state instead of delivering the signal.

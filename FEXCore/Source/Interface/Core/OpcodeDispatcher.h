@@ -458,6 +458,7 @@ public:
   void INCOp(OpcodeArgs);
   void DECOp(OpcodeArgs);
   void NEGOp(OpcodeArgs);
+  void DivideErrorIf(OpcodeArgs, Ref Src, CondClass Cond, unsigned Bit = 0);
   void DIVOp(OpcodeArgs);
   void IDIVOp(OpcodeArgs);
   void BSFOp(OpcodeArgs);
