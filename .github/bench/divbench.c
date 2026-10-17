@@ -12,9 +12,9 @@ int main(int argc, char** argv) {
   double t1 = now();
   for (long i = 0; i < n; i++) { uint64_t q, r; __asm__ volatile("div %4" : "=a"(q), "=d"(r) : "a"(acc * 0x9e3779b97f4a7c15ull), "d"(0ull), "r"((uint64_t)(i | 3))); acc += q ^ r; }
   double t2 = now();
-  for (long i = 0; i < n; i++) { int64_t q, r; __asm__ volatile("cqo; idiv %3" : "=a"(q), "=d"(r) : "a"((int64_t)(acc * 0x9e3779b97f4a7c15ull)), "r"((int64_t)(i | 3)) ); acc += q ^ r; }
+  for (long i = 0; i < n; i++) { int64_t q, r; __asm__ volatile("cqo; idiv %3" : "=a"(q), "=&d"(r) : "a"((int64_t)(acc * 0x9e3779b97f4a7c15ull)), "r"((int64_t)(i | 3)) ); acc += q ^ r; }
   double t3 = now();
-  for (long i = 0; i < n; i++) { int32_t q, r; __asm__ volatile("cdq; idiv %3" : "=a"(q), "=d"(r) : "a"((int32_t)(acc * 2654435761u)), "r"((int32_t)(i | 3))); acc += q ^ r; }
+  for (long i = 0; i < n; i++) { int32_t q, r; __asm__ volatile("cdq; idiv %3" : "=a"(q), "=&d"(r) : "a"((int32_t)(acc * 2654435761u)), "r"((int32_t)(i | 3))); acc += q ^ r; }
   double t4 = now();
   printf("div32 %.2f ns  div64 %.2f ns  idiv64 %.2f ns  idiv32 %.2f ns  (acc %llx)\n", (t1 - t0) / n * 1e9, (t2 - t1) / n * 1e9,
          (t3 - t2) / n * 1e9, (t4 - t3) / n * 1e9, (unsigned long long)acc);
