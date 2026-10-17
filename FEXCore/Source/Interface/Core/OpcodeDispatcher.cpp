@@ -3802,18 +3802,72 @@ void OpDispatchBuilder::NEGOp(OpcodeArgs) {
   }
 }
 
+// #DE, integer divide error. x86 raises it for a zero divisor and for a quotient that does not fit the destination;
+// Linux delivers both as SIGFPE with si_code FPE_INTDIV (arch/x86/kernel/traps.c, exc_divide_error) at the divide, with
+// the registers unchanged. Arm64 divides never trap, so the frontend branches to a faulting block instead. The checks use
+// plain ALU ops and cbz/cbnz/tbz only, so the guest NZCV is never touched.
+//
+// IR values must not cross blocks, so a check that runs before the divide re-reads its operands afterwards (free for
+// registers, which live in host registers; a memory divisor is read a second time). An IDIV quotient overflow is only
+// known after the divide: there the new RAX/RDX are blended with the old values under an all-ones fault mask, so a
+// faulting divide leaves them unchanged, and the branch comes last.
+void OpDispatchBuilder::DivideErrorIf(OpcodeArgs, Ref Src, CondClass Cond, unsigned Bit) {
+  auto FaultBlock = CreateNewCodeBlockAfter(GetCurrentBlock());
+  auto ContinueBlock = CreateNewCodeBlockAfter(FaultBlock);
+
+  if (Cond == CondClass::TSTZ || Cond == CondClass::TSTNZ) {
+    auto Jump = CondJumpBit(Src, Bit, Cond == CondClass::TSTNZ);
+    SetTrueJumpTarget(Jump, FaultBlock);
+    SetFalseJumpTarget(Jump, ContinueBlock);
+  } else {
+    CondJump(Src, FaultBlock, ContinueBlock, Cond);
+  }
+
+  SetCurrentCodeBlock(FaultBlock);
+  StartNewBlock();
+  // #DE is a fault: RIP points at the divide instruction itself.
+  _StoreContextGPR(GetGPROpSize(), GetRelocatedPC(Op, -Op->InstSize), offsetof(FEXCore::Core::CPUState, rip));
+  Break(FEXCore::IR::BreakDefinition {
+    .ErrorRegister = 0,
+    .Signal = Core::FAULT_SIGFPE,
+    .TrapNumber = X86State::X86_TRAPNO_DE,
+    .si_code = 1, ///< FPE_INTDIV
+  });
+
+  SetCurrentCodeBlock(ContinueBlock);
+  StartNewBlock();
+}
+
 void OpDispatchBuilder::DIVOp(OpcodeArgs) {
   const auto GPRSize = GetGPROpSize();
   auto Size = OpSizeFromSrc(Op);
-
-  // This loads the divisor. 32-bit/64-bit paths mask inside the JIT, 8/16 do not.
-  Ref Divisor = LoadSourceGPR(Op, Op->Dest, Op->Flags, {.AllowUpperGarbage = Size >= OpSize::i32Bit});
 
   if (Size == OpSize::i64Bit && !Is64BitMode) {
     LogMan::Msg::EFmt("Doesn't exist in 32bit mode");
     DecodeFailure = true;
     return;
   }
+
+  {
+    // #DE unless the upper half of the dividend is below the divisor; this also covers a zero divisor.
+    Ref Divisor = LoadSourceGPR(Op, Op->Dest, Op->Flags, {.AllowUpperGarbage = true});
+    if (Size == OpSize::i64Bit) {
+      // Borrow out of RDX - Divisor without NZCV: its sign bit is set exactly when RDX < Divisor.
+      Ref High = LoadGPRRegister(X86State::REG_RDX);
+      Ref Diff = _Sub(OpSize::i64Bit, High, Divisor);
+      Ref Borrow = _Or(OpSize::i64Bit, _Andn(OpSize::i64Bit, Divisor, High), _Andn(OpSize::i64Bit, Diff, _Xor(OpSize::i64Bit, High, Divisor)));
+      DivideErrorIf(Op, Borrow, CondClass::TSTZ, 63);
+    } else {
+      // Zero-extended to 64 bits, High - Divisor is negative exactly when High < Divisor.
+      const auto Bits = IR::OpSizeAsBits(Size);
+      Ref High = Size == OpSize::i8Bit ? _Bfe(OpSize::i64Bit, 8, 8, LoadGPRRegister(X86State::REG_RAX)) :
+                                         _Bfe(OpSize::i64Bit, Bits, 0, LoadGPRRegister(X86State::REG_RDX));
+      DivideErrorIf(Op, _Sub(OpSize::i64Bit, High, _Bfe(OpSize::i64Bit, Bits, 0, Divisor)), CondClass::TSTZ, 63);
+    }
+  }
+
+  // This loads the divisor. 32-bit/64-bit paths mask inside the JIT, 8/16 do not.
+  Ref Divisor = LoadSourceGPR(Op, Op->Dest, Op->Flags, {.AllowUpperGarbage = Size >= OpSize::i32Bit});
 
   Ref Quotient = _AllocateGPR(true);
   Ref Remainder = _AllocateGPR(true);
@@ -3848,11 +3902,8 @@ void OpDispatchBuilder::DIVOp(OpcodeArgs) {
 }
 
 void OpDispatchBuilder::IDIVOp(OpcodeArgs) {
-  // This loads the divisor
-  Ref Divisor = LoadSourceGPR(Op, Op->Dest, Op->Flags);
-
   const auto GPRSize = GetGPROpSize();
-  auto Size = OpSizeFromSrc(Op);
+  const auto Size = OpSizeFromSrc(Op);
 
   if (Size == OpSize::i64Bit && !Is64BitMode) {
     LogMan::Msg::EFmt("Doesn't exist in 32bit mode");
@@ -3860,34 +3911,117 @@ void OpDispatchBuilder::IDIVOp(OpcodeArgs) {
     return;
   }
 
-  Ref Quotient = _AllocateGPR(true);
-  Ref Remainder = _AllocateGPR(true);
+  // #DE for a zero divisor. Checked before the divide, so the 128-bit divide helper never sees one.
+  DivideErrorIf(Op, LoadSourceGPR(Op, Op->Dest, Op->Flags), CondClass::EQ);
 
+  // #DE when the quotient does not fit the operand size. Compiled code almost always divides a dividend that is the
+  // sign extension of its low half (CBW/CWD/CDQ/CQO); then the only overflow is MIN / -1, which is checked from the
+  // inputs, off the critical path of the result. Any other dividend takes a slow path that checks the quotient itself.
+  const auto Bits = IR::OpSizeAsBits(Size);
+  Ref NotSignExtended {};
   if (Size == OpSize::i8Bit) {
-    Ref Src1 = LoadGPRRegister(X86State::REG_RAX);
-    Src1 = _Sbfe(OpSize::i64Bit, 16, 0, Src1);
-    Divisor = _Sbfe(OpSize::i64Bit, 8, 0, Divisor);
-
-    _Div(OpSize::i64Bit, Src1, Invalid(), Divisor, Quotient, Remainder);
-
-    // AX[15:0] = concat<URem[7:0]:UDiv[7:0]>
-    auto ResultAX = _Bfi(GPRSize, 8, 8, Quotient, Remainder);
-    StoreGPRRegister(X86State::REG_RAX, ResultAX, OpSize::i16Bit);
+    Ref AX = LoadGPRRegister(X86State::REG_RAX);
+    NotSignExtended = _Xor(OpSize::i64Bit, _Sbfe(OpSize::i64Bit, 16, 0, AX), _Sbfe(OpSize::i64Bit, 8, 0, AX));
   } else {
-    Ref Src1 = LoadGPRRegister(X86State::REG_RAX);
-    Ref Src2 = LoadGPRRegister(X86State::REG_RDX);
+    Ref SignOfLow = _Sbfe(OpSize::i64Bit, 1, Bits - 1, LoadGPRRegister(X86State::REG_RAX));
+    NotSignExtended = _Xor(OpSize::i64Bit, _Sbfe(OpSize::i64Bit, Bits, 0, LoadGPRRegister(X86State::REG_RDX)), SignOfLow);
+  }
 
-    _Div(Size, Src1, Src2, Divisor, Quotient, Remainder);
+  auto FastBlock = CreateNewCodeBlockAfter(GetCurrentBlock());
+  auto SlowBlock = CreateNewCodeBlockAfter(FastBlock);
+  auto ExitBlock = CreateNewCodeBlockAfter(SlowBlock);
+  CondJump(NotSignExtended, SlowBlock, FastBlock, CondClass::NEQ);
 
-    if (Size == OpSize::i32Bit) {
-      Quotient = _Bfe(OpSize::i32Bit, IR::OpSizeAsBits(Size), 0, Quotient);
-      Remainder = _Bfe(OpSize::i32Bit, IR::OpSizeAsBits(Size), 0, Remainder);
-      Size = OpSize::iInvalid;
+  for (bool Slow : {false, true}) {
+    SetCurrentCodeBlock(Slow ? SlowBlock : FastBlock);
+    StartNewBlock();
+
+    if (!Slow) {
+      // MIN / -1: (Low ^ MIN) | (Divisor + 1) is zero exactly then (both sign-extended to 64 bits).
+      Ref Low = _Sbfe(OpSize::i64Bit, Bits, 0, LoadGPRRegister(X86State::REG_RAX));
+      Ref Divisor = _Sbfe(OpSize::i64Bit, Bits, 0, LoadSourceGPR(Op, Op->Dest, Op->Flags));
+      Ref Min = Constant(-(int64_t(1) << (Bits - 1)));
+      DivideErrorIf(Op, _Or(OpSize::i64Bit, _Xor(OpSize::i64Bit, Low, Min), _Add(OpSize::i64Bit, Divisor, Constant(1))), CondClass::EQ);
     }
 
-    StoreGPRRegister(X86State::REG_RAX, Quotient, Size);
-    StoreGPRRegister(X86State::REG_RDX, Remainder, Size);
+    // This loads the divisor
+    Ref Divisor = LoadSourceGPR(Op, Op->Dest, Op->Flags);
+
+    Ref Quotient = _AllocateGPR(true);
+    Ref Remainder = _AllocateGPR(true);
+    Ref FaultMask {};
+
+    // Slow path only: an all-ones FaultMask when the quotient does not fit; RAX/RDX are then blended back to their
+    // old values (see DivideErrorIf).
+    auto OverflowMask = [this](Ref Overflow) -> Ref {
+      // Overflow | -Overflow has the sign bit set exactly when Overflow is non-zero.
+      return _Sbfe(OpSize::i64Bit, 1, 63, _Or(OpSize::i64Bit, Overflow, _Sub(OpSize::i64Bit, Constant(0), Overflow)));
+    };
+    auto Blend = [this, &FaultMask](Ref Result, Ref Old) -> Ref {
+      if (!FaultMask) {
+        return Result;
+      }
+      return _Xor(OpSize::i64Bit, Result, _And(OpSize::i64Bit, _Xor(OpSize::i64Bit, Result, Old), FaultMask));
+    };
+
+    if (Size == OpSize::i8Bit) {
+      Ref Src1 = LoadGPRRegister(X86State::REG_RAX);
+      Ref Dividend = _Sbfe(OpSize::i64Bit, 16, 0, Src1);
+      Divisor = _Sbfe(OpSize::i64Bit, 8, 0, Divisor);
+
+      _Div(OpSize::i64Bit, Dividend, Invalid(), Divisor, Quotient, Remainder);
+
+      if (Slow) {
+        // The 64-bit divide of the sign-extended operands is exact.
+        FaultMask = OverflowMask(_Xor(OpSize::i64Bit, Quotient, _Sbfe(OpSize::i64Bit, 8, 0, Quotient)));
+      }
+
+      // AX[15:0] = concat<URem[7:0]:UDiv[7:0]>
+      auto ResultAX = _Bfi(GPRSize, 8, 8, Quotient, Remainder);
+      StoreGPRRegister(X86State::REG_RAX, Blend(ResultAX, Src1), OpSize::i16Bit);
+    } else {
+      Ref Src1 = LoadGPRRegister(X86State::REG_RAX);
+      Ref Src2 = LoadGPRRegister(X86State::REG_RDX);
+
+      _Div(Size, Src1, Src2, Divisor, Quotient, Remainder);
+
+      if (Slow && Size == OpSize::i64Bit) {
+        // The 128/64 divide truncates an overflowing quotient, so check Quotient * Divisor + Remainder == RDX:RAX.
+        // The low 64 bits always agree; compare the high half of the 128-bit sum. The sign bit of Carry is set
+        // exactly when SumLo < ProdLo (unsigned), i.e. on a carry out of the low half.
+        Ref ProdLo = _Mul(OpSize::i64Bit, Quotient, Divisor);
+        Ref SumLo = _Add(OpSize::i64Bit, ProdLo, Remainder);
+        Ref Diff = _Sub(OpSize::i64Bit, SumLo, ProdLo);
+        Ref Carry = _Or(OpSize::i64Bit, _Andn(OpSize::i64Bit, ProdLo, SumLo), _Andn(OpSize::i64Bit, Diff, _Xor(OpSize::i64Bit, SumLo, ProdLo)));
+        Ref SumHi = _Add(OpSize::i64Bit, _MulH(OpSize::i64Bit, Quotient, Divisor), _Sbfe(OpSize::i64Bit, 1, 63, Remainder));
+        SumHi = _Add(OpSize::i64Bit, SumHi, _Bfe(OpSize::i64Bit, 1, 63, Carry));
+        FaultMask = OverflowMask(_Xor(OpSize::i64Bit, SumHi, Src2));
+      } else if (Slow) {
+        // 16-bit divides run as an exact 32-bit divide, 32-bit ones as a 64-bit divide (whose only overflow,
+        // INT64_MIN / -1, leaves a quotient that does not fit in 32 bits either).
+        Ref Wide = Size == OpSize::i16Bit ? _Sbfe(OpSize::i64Bit, 32, 0, Quotient) : Quotient;
+        FaultMask = OverflowMask(_Xor(OpSize::i64Bit, Wide, _Sbfe(OpSize::i64Bit, Bits, 0, Quotient)));
+      }
+
+      auto StoreSize = Size;
+      if (Size == OpSize::i32Bit) {
+        Quotient = _Bfe(OpSize::i32Bit, IR::OpSizeAsBits(Size), 0, Quotient);
+        Remainder = _Bfe(OpSize::i32Bit, IR::OpSizeAsBits(Size), 0, Remainder);
+        StoreSize = OpSize::iInvalid;
+      }
+
+      StoreGPRRegister(X86State::REG_RAX, Blend(Quotient, Src1), StoreSize);
+      StoreGPRRegister(X86State::REG_RDX, Blend(Remainder, Src2), StoreSize);
+    }
+
+    if (FaultMask) {
+      DivideErrorIf(Op, FaultMask, CondClass::NEQ);
+    }
+    Jump(ExitBlock);
   }
+
+  SetCurrentCodeBlock(ExitBlock);
+  StartNewBlock();
 
   // All flags are undefined.
   AcidTestFlags(X86State::RFLAG_OF_RAW_LOC, X86State::RFLAG_SF_RAW_LOC, X86State::RFLAG_ZF_RAW_LOC, X86State::RFLAG_AF_RAW_LOC,
