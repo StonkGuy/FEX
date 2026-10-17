@@ -1,0 +1,83 @@
+name: insn-diff (native x86-64 oracle vs FEX)
+
+on:
+  push:
+    branches: [ ci/insn-diff ]
+  workflow_dispatch:
+    inputs:
+      fexref: { description: "FEX ref to test", default: "eac-2610" }
+      cases: { description: "cases per form", default: "200" }
+
+env:
+  CASES: ${{ inputs.cases || '200' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+    - uses: actions/checkout@v4
+    - name: Build and run natively
+      run: |
+        cd eac-tests/insn-diff && mkdir -p out
+        ./build.sh $PWD/out/insn_diff
+        grep -m1 "model name" /proc/cpuinfo | tee out/cpu-build.txt
+        time ./out/insn_diff $CASES > out/native-a.txt; tail -c 300 out/native-a.txt; wc -l out/native-a.txt
+    - uses: actions/upload-artifact@v4
+      with: { name: native-a, path: eac-tests/insn-diff/out }
+
+  native2:
+    needs: build
+    strategy: { fail-fast: false, matrix: { os: [ ubuntu-22.04, ubuntu-24.04 ] } }
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/download-artifact@v4
+      with: { name: native-a, path: out }
+    - run: |
+        chmod +x out/insn_diff; grep -m1 "model name" /proc/cpuinfo
+        out/insn_diff $CASES > native-${{ matrix.os }}.txt; head -2 native-${{ matrix.os }}.txt
+    - uses: actions/upload-artifact@v4
+      with: { name: "native-${{ matrix.os }}", path: "native-${{ matrix.os }}.txt" }
+
+  fex:
+    needs: build
+    runs-on: ubuntu-24.04-arm
+    steps:
+    - uses: actions/checkout@v4
+      with: { ref: "${{ inputs.fexref || 'eac-2610' }}", submodules: recursive, path: fex }
+    - uses: actions/download-artifact@v4
+      with: { name: native-a, path: out }
+    - name: Tools
+      run: sudo apt-get update -qq && sudo apt-get install -y -qq clang lld ninja-build cmake python3 >/dev/null
+    - name: Build FEX
+      run: |
+        cd fex; git log --oneline -1
+        cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+          -DBUILD_TESTING=OFF -DBUILD_THUNKS=OFF -DBUILD_FEXCONFIG=OFF -DENABLE_LTO=OFF -DENABLE_ASSERTIONS=OFF \
+          -DCMAKE_CXX_SCAN_FOR_MODULES=OFF -DUSE_LINKER=lld >/dev/null
+        set -o pipefail; cmake --build build -j$(nproc) 2>&1 | tail -2
+    - name: Run under FEX
+      run: |
+        chmod +x out/insn_diff; lscpu | head -20
+        time fex/build/Bin/FEX out/insn_diff $CASES > fex.txt || echo "rc=$?"; head -2 fex.txt; wc -l fex.txt
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with: { name: fex, path: fex.txt }
+
+  compare:
+    needs: [ build, native2, fex ]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/download-artifact@v4
+      with: { path: art }
+    - run: |
+        C=eac-tests/insn-diff/compare.py; J=art/native-a/forms.json; B=art/native-a/insn_diff; chmod +x $B
+        for n in art/native-ubuntu-*/*.txt; do echo "##### native-a vs $n"; python3 $C $J art/native-a/native-a.txt $n --examples 1 | head -200; done > report.txt || true
+        echo "##### native-a vs fex" >> report.txt
+        python3 $C $J art/native-a/native-a.txt art/fex/fex.txt --examples 3 --cases-out shows.txt >> report.txt || true
+        echo "##### inputs of the first defined differences" >> report.txt
+        while read f c; do $B show $f $c; done < shows.txt >> report.txt
+        grep -A3 "^totals" report.txt
+    - uses: actions/upload-artifact@v4
+      with: { name: report, path: report.txt }
