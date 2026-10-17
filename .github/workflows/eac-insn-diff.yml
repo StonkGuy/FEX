@@ -63,7 +63,9 @@ jobs:
         chmod +x out/insn_diff; lscpu | head -20
         set +e; chmod +x out/div_fault_test; timeout 60 fex/build/Bin/FEX out/div_fault_test > div-fex.txt 2>&1; echo "rc=$?" >> div-fex.txt; cat div-fex.txt
         time fex/build/Bin/FEX out/insn_diff $CASES > fex.txt || echo "rc=$?"; head -2 fex.txt; wc -l fex.txt
-        mkdir -p r && mv fex.txt div-fex.txt r/
+        (cd fex/eac-tests && TIMEOUT=120 OUT=$PWD/rb ./run-all.sh $PWD/../build/Bin/FEX > ../../runall.txt 2>&1; echo "run-all rc=$?" >> ../../runall.txt)
+        grep -v " PASS " runall.txt | tail -20
+        mkdir -p r && mv fex.txt div-fex.txt runall.txt r/
     - uses: actions/upload-artifact@v4
       if: always()
       with: { name: "fex-${{ matrix.ref }}", path: r }
@@ -85,6 +87,7 @@ jobs:
         done
         echo "##### div-fault: native / eac-2610 / fix-div-de" >> report.txt
         for f in art/native-a/div-native.txt art/fex-*/div-fex.txt; do echo "== $f"; grep -v '^PASS' $f; done >> report.txt
+        for r in eac-2610 fix-div-de; do echo "##### eac-tests run-all under $r"; cat art/fex-$r/runall.txt; done >> report.txt
         echo "##### inputs of the first defined differences (fix-div-de)" >> report.txt
         while read f c; do $B show $f $c; done < shows-fix-div-de.txt >> report.txt
         grep -A3 "^totals" report.txt
