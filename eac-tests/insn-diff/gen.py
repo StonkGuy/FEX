@@ -189,7 +189,7 @@ F("gs_load", "mov rax, qword ptr gs:[0x400]", seq=False)
 F("gs_add", "add dword ptr gs:[0x408], ebx", 0, 0, ALL, seq=False)
 F("gs_index", "mov rax, qword ptr gs:[rcx*8+0x100]", cons=["idx64"], seq=False)
 F("gs_cmpxchg", "lock cmpxchg qword ptr gs:[0x400], rbx", 0, 0, ALL, cons=["cmpeqm"], seq=False)
-F("fs_self", ["mov rax, qword ptr fs:[0]", "mov rdx, qword ptr [rax]", "xor rax, rdx"], seq=False)
+F("fs_self", ["mov rax, qword ptr fs:[0]", "mov rdx, qword ptr [rax]", "xor rax, rdx", "xor edx, edx"], seq=False)
 F("gs_movs", ["push rsi", "mov rsi, 0x400", "lea rdi, [r15+0x500]", "mov rcx, 8", "rep movsb byte ptr es:[rdi], byte ptr gs:[rsi]", "xor rdi, rdi", "pop rsi"], seq=False, cons=["cld"])
 
 # ---- x87 ----

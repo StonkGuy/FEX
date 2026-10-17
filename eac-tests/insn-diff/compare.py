@@ -6,7 +6,7 @@
 Categories per differing case:
   defined      a GPR, XMM, x87 register, memory byte, signal or architecturally defined flag differs
   undef-flags  only flags the SDM/APM leave undefined for this form differ
-  x87-status   only FSW.PE (0x20) / FSW.C1 (0x200) differ (x87 precision/rounding indicator)
+  x87-status   only FSW exception flags (IE DE ZE OE UE PE SF, 0x7f) / FSW.C1 (0x200) differ
   x87-ulp      x87 transcendental result within 4 ulp of the 64-bit mantissa (and nothing else defined differs)
   mxcsr-flags  only MXCSR exception flag bits 0-5 differ
 Exit status 1 when any 'defined' difference exists.
@@ -56,9 +56,10 @@ def classify(fm, a, b):
                 cats.add("undef-flags")
         elif k == "fsw" and fm["cls"].startswith("x87"):
             x = int(va or "0", 16) ^ int(vb or "0", 16)
-            cats.add("x87-status" if not (x & ~0x220) else "defined")
-        elif k == "mx" and va is not None and vb is not None and not ((int(va, 16) ^ int(vb, 16)) & ~0x3f):
-            cats.add("mxcsr-flags")
+            cats.add("x87-status" if not (x & ~0x27f) else "defined")
+        elif k == "mx" and not (((int(va, 16) if va else int(vb, 16) & ~0x3f) ^
+                                 (int(vb, 16) if vb else int(va, 16) & ~0x3f)) & ~0x3f):
+            cats.add("mxcsr-flags")  # absent = unchanged input, whose exception flags are always clear
         elif k.startswith("st") and fm["cls"] == "x87tr" and va and vb:
             (ea, ma), (eb, mb) = f80(va), f80(vb)
             cats.add("x87-ulp" if ea == eb and abs(ma - mb) <= 4 else "defined")
