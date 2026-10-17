@@ -23,6 +23,7 @@ jobs:
         grep -m1 "model name" /proc/cpuinfo | tee out/cpu-build.txt
         time ./out/insn_diff $CASES > out/native-a.txt; tail -c 300 out/native-a.txt; wc -l out/native-a.txt
         sudo apt-get install -y -qq clang lld >/dev/null
+        gcc -O2 -static -o out/divbench ../../.github/bench/divbench.c && ./out/divbench 50000000 | tee out/divbench-native.txt
         sh ../div-fault/build.sh clang out/div_fault_test; set +e; ./out/div_fault_test > out/div-native.txt; echo "rc=$?" >> out/div-native.txt; cat out/div-native.txt
     - uses: actions/upload-artifact@v4
       with: { name: native-a, path: eac-tests/insn-diff/out }
@@ -65,7 +66,8 @@ jobs:
         time fex/build/Bin/FEX out/insn_diff $CASES > fex.txt || echo "rc=$?"; head -2 fex.txt; wc -l fex.txt
         (cd fex/eac-tests && TIMEOUT=120 OUT=$PWD/rb ./run-all.sh $PWD/../build/Bin/FEX > ../../runall.txt 2>&1; echo "run-all rc=$?" >> ../../runall.txt)
         grep -v " PASS " runall.txt | tail -20
-        mkdir -p r && mv fex.txt div-fex.txt runall.txt r/
+        chmod +x out/divbench; for k in 1 2 3; do fex/build/Bin/FEX out/divbench 50000000; done | tee divbench.txt
+        mkdir -p r && mv fex.txt div-fex.txt runall.txt divbench.txt r/
     - uses: actions/upload-artifact@v4
       if: always()
       with: { name: "fex-${{ matrix.ref }}", path: r }
@@ -88,6 +90,7 @@ jobs:
         echo "##### div-fault: native / eac-2610 / fix-div-de" >> report.txt
         for f in art/native-a/div-native.txt art/fex-*/div-fex.txt; do echo "== $f"; grep -v '^PASS' $f; done >> report.txt
         for r in eac-2610 fix-div-de; do echo "##### eac-tests run-all under $r"; cat art/fex-$r/runall.txt; done >> report.txt
+        { echo "##### divbench native"; cat art/native-a/divbench-native.txt; for r in eac-2610 fix-div-de; do echo "##### divbench $r"; cat art/fex-$r/divbench.txt; done; } >> report.txt
         echo "##### inputs of the first defined differences (fix-div-de)" >> report.txt
         while read f c; do $B show $f $c; done < shows-fix-div-de.txt >> report.txt
         grep -A3 "^totals" report.txt
