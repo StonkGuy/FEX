@@ -57,6 +57,20 @@ static void out_dec(i64 v) {
   out(b + i);
 }
 
+// 5-level paging (LA57): the user address space is 56 bits instead of 47, so TASK_SIZE_MAX is (1 << 56) - 4096. Some
+// x86-64 hosts (e.g. Ice Lake cloud VMs) run with it; FEX always presents the 47-bit layout. A hint above 47 bits is
+// only honoured with LA57 (arch/x86/mm/mmap.c), which is how this is detected.
+static int host_la57(void) {
+#if defined(__x86_64__)
+  i64 p = sc6(SYS_mmap, 1L << 52, 4096, 3 /* RW */, 0x22 /* MAP_PRIVATE|MAP_ANONYMOUS */, -1, 0);
+  if (p < 0 && p > -4096) return 0;
+  sc6(11 /* munmap */, p, 4096, 0, 0, 0, 0);
+  return (u64)p >= (1UL << 47);
+#else
+  return 0;
+#endif
+}
+
 static int failures;
 static const char* current;
 static int case_failed;
@@ -177,7 +191,7 @@ void _start_c(void) {
   begin("overflow");
   check("map", map_at(0x70000000UL, PAGE, MAP_FIXED_NOREPLACE), 0x70000000UL);
   check("end wraps", sc2(SYS_munmap, 0x70000000UL, -0x70000000L), -EINVAL);
-  check("end past the address space", sc2(SYS_munmap, 0x70000000UL, 0x800000000000UL), -EINVAL);
+  check("end past the address space", sc2(SYS_munmap, 0x70000000UL, host_la57() ? 0x100000000000000UL : 0x800000000000UL), -EINVAL);
   check("still mapped", mapped(0x70000000UL), 1);
   check("munmap", sc2(SYS_munmap, 0x70000000UL, PAGE), 0);
   end();
