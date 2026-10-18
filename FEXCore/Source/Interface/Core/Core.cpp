@@ -201,8 +201,13 @@ uint32_t ContextImpl::ReconstructCompactedEFLAGS(FEXCore::Core::InternalThreadSt
     case X86State::RFLAG_SF_RAW_LOC:
     case X86State::RFLAG_OF_RAW_LOC:
     case X86State::RFLAG_DF_RAW_LOC:
+    case X86State::RFLAG_NZCV_LOC:
+    case X86State::RFLAG_NZCV_1_LOC:
+    case X86State::RFLAG_NZCV_2_LOC:
+    case X86State::RFLAG_NZCV_3_LOC:
       // Intentionally do nothing.
-      // These contain multiple bits which can corrupt other members when compacted.
+      // These contain multiple bits which can corrupt other members when compacted. The NZCV bytes hold the packed
+      // SF/ZF/CF/OF handled below; ORing them in raw would leak e.g. the overflow bit into reserved EFLAGS bit 31.
       break;
     default: EFLAGS |= uint32_t {Frame->State.flags[i]} << i; break;
     }
