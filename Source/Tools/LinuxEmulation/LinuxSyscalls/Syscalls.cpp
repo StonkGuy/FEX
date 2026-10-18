@@ -855,6 +855,14 @@ void SyscallHandler::HandleSyscallImpl(FEXCore::Core::CpuStateFrame* Frame, uint
     Thread->Thread->CurrentFrame->State.gregs[FEXCore::X86State::REG_RAX] = Result & Mask;
   };
 
+  if (FEX::HLE::ThreadManager::GetStateObjectFromCPUState(Frame)->SyscallUserDispatch.Enabled) [[unlikely]] {
+    const auto Result = SeccompEmulator.ExecuteSyscallUserDispatch(Frame, JITPC, GetArg(Is64Bit, Frame, 0));
+    if (Result.EarlyReturn) {
+      SetResult(Frame, Result.Result);
+      return;
+    }
+  }
+
   if (SeccompEmulator.HasFilter(Frame)) {
     FEX::HLE::SyscallArguments Args {
       .Argument =
@@ -1026,6 +1034,9 @@ void SyscallHandler::UnlockAfterFork(FEXCore::Core::InternalThreadState* LiveThr
   if (Child) {
     // Code maps are closed upon fork in the child
     FM.SetProtectedCodeMapFD(-1);
+
+    // Syscall User Dispatch is not inherited by a forked child.
+    FEX::HLE::ThreadManager::GetStateObjectFromFEXCoreThread(LiveThread)->SyscallUserDispatch = {};
 
     VMATracking.Mutex.StealAndDropActiveLocks();
     CodeCachePatchingMutex.StealAndDropActiveLocks();

@@ -101,6 +101,15 @@ struct ThreadStateObject : public FEXCore::Allocator::FEXAllocOperators {
   // in SeccompEmulator for the Linux semantics this reproduces.
   uint64_t SeccompTrapRIP {};
 
+  // Syscall User Dispatch state (prctl(PR_SET_SYSCALL_USER_DISPATCH)). Emulated rather than passed to the host kernel, whose
+  // dispatch would apply to FEX's own syscalls. Per thread like Linux: not inherited by clone or fork, gone after execve.
+  struct {
+    uint64_t Offset;
+    uint64_t Length;
+    uint64_t Selector;
+    bool Enabled;
+  } SyscallUserDispatch {};
+
   // Host stack pointer that guest code currently runs at when it is not the dispatcher's own level: a guest signal handler
   // entered from the C++ half of a syscall runs below that handler's frames. 0 means ReturningStackLocation. Lets rt_sigreturn
   // drop abandoned syscall-handler frames instead of leaking them.
