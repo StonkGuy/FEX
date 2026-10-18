@@ -1,0 +1,48 @@
+name: sigsys-redirect (native x86-64 oracle vs FEX)
+
+on:
+  push:
+    branches: [ ci/sigsys ]
+  workflow_dispatch:
+
+jobs:
+  native:
+    runs-on: ubuntu-24.04
+    steps:
+    - uses: actions/checkout@v4
+    - run: |
+        sudo apt-get install -y -qq clang lld >/dev/null
+        mkdir -p out; sh eac-tests/sigsys-redirect/build.sh clang out/sigsys_redirect_test
+        uname -r; set +e; time timeout 120 out/sigsys_redirect_test > out/native.txt 2>&1; echo "rc=$?" >> out/native.txt; cat out/native.txt
+    - uses: actions/upload-artifact@v4
+      with: { name: native, path: out }
+
+  fex:
+    needs: native
+    runs-on: ubuntu-24.04-arm
+    strategy: { fail-fast: false, matrix: { ref: [ eac-2610, ci/sigsys ] } }
+    steps:
+    - uses: actions/checkout@v4
+      with: { ref: "${{ matrix.ref }}", submodules: recursive, path: fex }
+    - uses: actions/download-artifact@v4
+      with: { name: native, path: out }
+    - name: Tools
+      run: sudo apt-get update -qq && sudo apt-get install -y -qq clang lld ninja-build cmake python3 >/dev/null
+    - name: Build FEX
+      run: |
+        cd fex; git log --oneline -1
+        cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+          -DBUILD_TESTING=OFF -DBUILD_THUNKS=OFF -DBUILD_FEXCONFIG=OFF -DENABLE_LTO=OFF -DENABLE_ASSERTIONS=OFF \
+          -DCMAKE_CXX_SCAN_FOR_MODULES=OFF -DUSE_LINKER=lld >/dev/null
+        set +e; cmake --build build -j$(nproc) > ../build.log 2>&1; rc=$?; grep -E -A5 "error:|FAILED" ../build.log | head -60; tail -2 ../build.log; exit $rc
+    - name: Run under FEX
+      run: |
+        mkdir -p r; chmod +x out/sigsys_redirect_test; uname -r
+        set +e
+        FEX_NEEDSSECCOMP=1 timeout 300 fex/build/Bin/FEX out/sigsys_redirect_test > r/fex.txt 2>&1; echo "rc=$?" >> r/fex.txt; cat r/fex.txt
+        if [ -d fex/eac-tests/sigsys-redirect ]; then
+          (cd fex/eac-tests && TIMEOUT=300 OUT=$PWD/rb ./run-all.sh $PWD/../build/Bin/FEX > ../../r/runall.txt 2>&1; echo "run-all rc=$?" >> ../../r/runall.txt); cat r/runall.txt
+        fi
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with: { name: "fex-${{ strategy.job-index }}", path: r }
