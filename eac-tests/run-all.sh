@@ -5,6 +5,9 @@
 # on an Arm64 Linux with FEX registered through binfmt_misc it runs them under FEX. A runner can be given explicitly,
 # e.g. `./run-all.sh FEXInterpreter`. Needs clang with the x86-64 target (ld.lld optional) and python3.
 # Environment: NATIVE=1 for the reference run on x86-64 Linux (every test then expects PASS), CC (default clang), OUT (build directory, default ./build), TIMEOUT (seconds per run, default 60).
+# A run that exceeds TIMEOUT is killed and reported as TIMEOUT; a test that could not exercise its feature prints
+# RESULT: SKIP with the reason. SKIP is accepted only in the NATIVE=1 run (the host may lack the feature, e.g. CPUID
+# faulting on AMD or in a VM) and is listed with its reason; under FEX a SKIP means the feature is missing and fails.
 # Exit status: 0 when every run gives its expected result, 1 otherwise.
 HERE=$(cd "$(dirname "$0")" && pwd)
 CC=${CC:-clang}; OUT=${OUT:-$HERE/build}; TIMEOUT=${TIMEOUT:-60}
@@ -57,11 +60,15 @@ echo "$TESTS" | while read -r name bin expect envs; do
   [ "$envs" = - ] && envs=
   [ "${NATIVE:-0}" = 1 ] && expect=PASS
   log="$OUT/$name${envs:+.$(echo "$envs" | tr '=' '_')}.log"
-  (cd "$OUT" && env $envs timeout "$TIMEOUT" "$@" "./$bin" >"$log" 2>&1)
+  (cd "$OUT" && env $envs timeout -k 5 "$TIMEOUT" "$@" "./$bin" >"$log" 2>&1)
   rc=$?
   got=$(grep -o 'RESULT: [A-Z]*' "$log" | tail -1 | cut -d' ' -f2)
-  [ -n "$got" ] || got="NONE(exit $rc)"
-  if [ "$got" = "$expect" ]; then verdict=ok; else verdict=UNEXPECTED; echo bad > "$OUT/.bad"; fi
+  if [ -z "$got" ]; then
+    case $rc in 124|137) got="TIMEOUT(${TIMEOUT}s)" ;; *) got="NONE(exit $rc)" ;; esac
+  fi
+  if [ "$got" = "$expect" ]; then verdict=ok
+  elif [ "$got" = SKIP ] && [ "${NATIVE:-0}" = 1 ]; then verdict="skipped: $(grep -m1 '^SKIP:' "$log" | cut -c7-)"
+  else verdict=UNEXPECTED; echo bad > "$OUT/.bad"; fi
   printf '%-20s %-30s %-14s expected %-5s %s\n' "$name" "$envs" "$got" "$expect" "$verdict"
 done
 
