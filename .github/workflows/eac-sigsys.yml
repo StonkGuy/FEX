@@ -40,7 +40,7 @@ jobs:
         mkdir -p r; chmod +x out/sigsys_redirect_test; uname -r
         set +e
         FEX_NEEDSSECCOMP=1 timeout 300 fex/build/Bin/FEX out/sigsys_redirect_test > r/fex.txt 2>&1; echo "rc=$?" >> r/fex.txt; cat r/fex.txt
-        if [ -d fex/eac-tests/sigsys-redirect ]; then
+        if true; then
           (cd fex/eac-tests && TIMEOUT=300 OUT=$PWD/rb ./run-all.sh $PWD/../build/Bin/FEX > ../../r/runall.txt 2>&1; echo "run-all rc=$?" >> ../../r/runall.txt); cat r/runall.txt
         fi
     - uses: actions/upload-artifact@v4
