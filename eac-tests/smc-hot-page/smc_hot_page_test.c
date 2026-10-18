@@ -218,26 +218,24 @@ done:
 }
 
 // Entry: re-exec with FEX_PROFILESTATS=1 so that FEX publishes its counters, and pick up FEX_SMCHOTPAGEFAULTS.
-static char envbuf[160][256];
-static char* newenv[164];
+// The new environment is the old one plus one entry: an array of pointers to the original strings (they stay valid
+// until execve copies them), sized from the actual environment, so any number and length of variables works.
 __attribute__((used)) static void entry_c(u64* sp) {
   u64 argc = sp[0]; char** argv = (char**)(sp + 1); char** envp = argv + argc + 1;
-  int have = 0, n = 0, fits = 1;
-  for (char** e = envp; *e; ++e) {
-    if (starts(*e, "FEX_PROFILESTATS=")) have = 1;
-    if (starts(*e, "FEX_SMCHOTPAGEFAULTS=")) {
+  u64 n = 0; int have = 0;
+  for (; envp[n]; ++n) {
+    char* e = envp[n];
+    if (starts(e, "FEX_PROFILESTATS=")) have = 1;
+    if (starts(e, "FEX_SMCHOTPAGEFAULTS=")) {
       HotPageFaults = 0;
-      for (const char* p = *e + 21; *p >= '0' && *p <= '9'; ++p) HotPageFaults = HotPageFaults * 10 + (*p - '0');
+      for (const char* p = e + 21; *p >= '0' && *p <= '9'; ++p) HotPageFaults = HotPageFaults * 10 + (*p - '0');
     }
-    if (n >= 158 || slen(*e) >= sizeof(envbuf[0])) { fits = 0; continue; }
-    u64 i = 0;
-    for (; (*e)[i]; ++i) envbuf[n][i] = (*e)[i];
-    envbuf[n][i] = 0; newenv[n] = envbuf[n]; ++n;
   }
-  if (!have && fits) {
+  if (!have) {
     static char Stats[] = "FEX_PROFILESTATS=1";
-    newenv[n++] = Stats;
-    newenv[n] = 0;
+    char* newenv[n + 2];
+    for (u64 i = 0; i < n; ++i) newenv[i] = envp[i];
+    newenv[n] = Stats; newenv[n + 1] = 0;
     sc3(SYS_execve, (i64)"/proc/self/exe", (i64)argv, (i64)newenv);
     // execve returned: carry on, check 4 reports what this environment supports
   }
