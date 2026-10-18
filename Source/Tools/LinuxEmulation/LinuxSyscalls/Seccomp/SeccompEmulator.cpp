@@ -120,6 +120,16 @@ $end_info$
 // TRACE_syscall
 // - ptrace unsupported
 
+#ifndef PR_SET_SYSCALL_USER_DISPATCH
+#define PR_SET_SYSCALL_USER_DISPATCH 59
+#define PR_SYS_DISPATCH_OFF 0
+#define PR_SYS_DISPATCH_ON 1
+#endif
+#ifndef SYSCALL_DISPATCH_FILTER_ALLOW
+#define SYSCALL_DISPATCH_FILTER_ALLOW 0
+#define SYSCALL_DISPATCH_FILTER_BLOCK 1
+#endif
+
 namespace FEX::HLE {
 uint64_t SeccompEmulator::Handle(FEXCore::Core::CpuStateFrame* Frame, uint32_t Op, uint32_t flags, void* arg) {
   // If seccomp isn't enabled then say so.
@@ -315,6 +325,69 @@ void SeccompEmulator::DeserializeFilters(FEXCore::Core::CpuStateFrame* Frame, in
   close(FD);
 }
 
+void SeccompEmulator::QueueTrapSignal(FEX::HLE::ThreadStateObject* Thread, int Code, uint32_t Errno, uint64_t PostSyscallRIP,
+                                      uint64_t SyscallNumber, uint32_t Arch) {
+  siginfo_t Info {
+    .si_signo = SIGSYS,
+    .si_errno = static_cast<int32_t>(Errno),
+    .si_code = Code,
+  };
+
+  // Linux reports the address just past the syscall (see PostSyscallRIP in ExecuteFilter). Record it in the thread so
+  // the guest signal frame is entered with it: the CpuStateFrame still holds the address of the `syscall` itself
+  // here (the dispatcher advances it after the filter has run), and entering the handler at the syscall address
+  // would make rt_sigreturn re-execute the trapped syscall with the handler's return value discarded.
+  Info.si_call_addr = reinterpret_cast<void*>(PostSyscallRIP);
+  Info.si_syscall = SyscallNumber;
+  Info.si_arch = Arch;
+
+  Thread->SeccompTrapRIP = PostSyscallRIP;
+
+  // Linux raises the trap with force_sig_info(): a SIGSYS the thread blocks or ignores is reset to SIG_DFL and
+  // unblocked, so the process dies from it rather than continuing with the signal pending.
+  SignalDelegation->PrepareForcedGuestSignal(Thread, SIGSYS);
+  SignalDelegation->QueueSignal(::getpid(), ::gettid(), SIGSYS, &Info, true);
+}
+
+void SeccompEmulator::ForceExitSignal(FEX::HLE::ThreadStateObject* Thread, int Signal) {
+  uint64_t Mask = 1ULL << (Signal - 1);
+  SignalDelegation->GuestSigProcMask(Thread, SIG_UNBLOCK, &Mask, nullptr);
+  SignalDelegation->UninstallHostHandler(Signal);
+  FHU::Syscalls::tgkill(::getpid(), ::gettid(), Signal);
+}
+
+SeccompEmulator::ExecuteFilterResult
+SeccompEmulator::ExecuteSyscallUserDispatch(FEXCore::Core::CpuStateFrame* Frame, uint64_t JITPC, uint64_t SyscallNumber) {
+  // Linux's syscall_user_dispatch(), for the instruction pointer the syscall returns to.
+  auto Thread = FEX::HLE::ThreadManager::GetStateObjectFromCPUState(Frame);
+  const auto& SUD = Thread->SyscallUserDispatch;
+  const uint64_t PostSyscallRIP = Thread->Thread->CTX->RestoreRIPFromHostPC(Frame->Thread, JITPC) + 2;
+
+  if (PostSyscallRIP - SUD.Offset < SUD.Length) {
+    return {false, 0};
+  }
+
+  // Not modelled: the ia32 vDSO rt_sigreturn exemption (arch_syscall_is_vdso_sigreturn), x86-64 has none.
+  if (SUD.Selector) {
+    uint8_t State {};
+    if (FaultSafeUserMemAccess::CopyFromUser(&State, reinterpret_cast<const void*>(SUD.Selector), sizeof(State))) {
+      ForceExitSignal(Thread, SIGSEGV);
+      return {true, SyscallNumber};
+    }
+    if (State == SYSCALL_DISPATCH_FILTER_ALLOW) {
+      return {false, 0};
+    }
+    if (State != SYSCALL_DISPATCH_FILTER_BLOCK) {
+      ForceExitSignal(Thread, SIGSYS);
+      return {true, SyscallNumber};
+    }
+  }
+
+  // syscall_rollback() leaves the syscall number in RAX, then trigger_sigsys().
+  QueueTrapSignal(Thread, 2 /* SYS_USER_DISPATCH */, 0, PostSyscallRIP, SyscallNumber, Is64BitMode() ? AUDIT_ARCH_X86_64 : AUDIT_ARCH_I386);
+  return {true, SyscallNumber};
+}
+
 SeccompEmulator::ExecuteFilterResult
 SeccompEmulator::ExecuteFilter(FEXCore::Core::CpuStateFrame* Frame, uint64_t JITPC, FEX::HLE::SyscallArguments* Args) {
   if (!HasFilter(Frame)) {
@@ -437,26 +510,7 @@ SeccompEmulator::ExecuteFilter(FEXCore::Core::CpuStateFrame* Frame, uint64_t JIT
     break;
   }
   case SECCOMP_RET_TRAP: {
-    siginfo_t Info {
-      .si_signo = SIGSYS,
-      .si_errno = static_cast<int32_t>(DataMasked),
-      .si_code = 1, // SYS_SECCOMP
-    };
-
-    // Report the address just past the syscall, matching Linux (see PostSyscallRIP above). Record it in the thread so
-    // the guest signal frame is entered with it: the CpuStateFrame still holds the address of the `syscall` itself
-    // here (the dispatcher advances it after the filter has run), and entering the handler at the syscall address
-    // would make rt_sigreturn re-execute the trapped syscall with the handler's return value discarded.
-    Info.si_call_addr = reinterpret_cast<void*>(PostSyscallRIP);
-    Info.si_syscall = Args->Argument[0];
-    Info.si_arch = Arch;
-
-    Thread->SeccompTrapRIP = PostSyscallRIP;
-
-    // Linux raises the trap with force_sig_seccomp(): a SIGSYS the thread blocks or ignores is reset to SIG_DFL and
-    // unblocked, so the process dies from it rather than continuing with the signal pending.
-    SignalDelegation->PrepareForcedGuestSignal(Thread, SIGSYS);
-    SignalDelegation->QueueSignal(::getpid(), ::gettid(), SIGSYS, &Info, true);
+    QueueTrapSignal(Thread, 1 /* SYS_SECCOMP */, DataMasked, PostSyscallRIP, Args->Argument[0], Arch);
 
     // A trapped syscall is never executed: the kernel skips it after syscall_rollback(), which leaves the syscall number
     // in RAX. Normally the guest handler has already run inside QueueSignal and its rt_sigreturn does not come back here;
