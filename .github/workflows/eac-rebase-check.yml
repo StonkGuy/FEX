@@ -1,0 +1,55 @@
+name: rebase check (eac-2610 vs eac-main-20261018)
+
+on:
+  push:
+    branches: [ ci/rebase-main-20261018 ]
+
+jobs:
+  native:
+    runs-on: ubuntu-24.04
+    steps:
+    - uses: actions/checkout@v4
+      with: { ref: eac-main-20261018 }
+    - run: |
+        sudo apt-get update -qq && sudo apt-get install -y -qq clang lld python3 >/dev/null
+        grep -m1 "model name" /proc/cpuinfo
+        set +e; cd eac-tests && NATIVE=1 TIMEOUT=120 ./run-all.sh > ../native.txt 2>&1; echo "rc=$?" >> ../native.txt; cat ../native.txt
+    - uses: actions/upload-artifact@v4
+      with: { name: native, path: native.txt }
+
+  fex:
+    runs-on: ubuntu-24.04-arm
+    strategy: { fail-fast: false, matrix: { ref: [ eac-2610, eac-main-20261018 ] } }
+    steps:
+    - uses: actions/checkout@v4
+      with: { ref: "${{ matrix.ref }}", submodules: recursive }
+    - name: Tools
+      run: sudo apt-get update -qq && sudo apt-get install -y -qq clang lld ninja-build cmake python3 nasm >/dev/null
+    - name: Build
+      run: |
+        git log --oneline -1
+        cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+          -DBUILD_TESTING=ON -DBUILD_THUNKS=OFF -DBUILD_FEXCONFIG=OFF -DENABLE_LTO=OFF -DENABLE_ASSERTIONS=ON \
+          -DENABLE_VIXL_DISASSEMBLER=ON -DCMAKE_CXX_SCAN_FOR_MODULES=OFF -DUSE_LINKER=lld >/dev/null
+        set +e; cmake --build build -j$(nproc) > ../build.log 2>&1; rc=$?; grep -E -A5 "error:|FAILED" ../build.log | head -60; tail -2 ../build.log; exit $rc
+    - name: eac-tests under FEX
+      run: |
+        set +e; cd eac-tests && TIMEOUT=120 OUT=$PWD/rb ./run-all.sh $PWD/../build/Bin/FEX > ../runall.txt 2>&1; echo "rc=$?" >> ../runall.txt; cat ../runall.txt
+    - name: ASM tests
+      run: |
+        set +e; cd build
+        ctest -j$(nproc) --timeout 60 -R "Test_(32|64)Bit_" > ../asm.txt 2>&1; echo "rc=$?" >> ../asm.txt
+        grep -E "tests passed|\(Failed\)|\(Timeout\)|Exception" ../asm.txt | tail -60
+    - name: InstCountCI
+      run: |
+        set +e; cd build
+        ctest -j$(nproc) --timeout 302 -R "InstCountCI/.*instcountci$" > ../icount.txt 2>&1; echo "rc=$?" >> ../icount.txt
+        grep -E "tests passed|Failed" ../icount.txt | tail -20
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: "fex-${{ matrix.ref }}"
+        path: |
+          runall.txt
+          asm.txt
+          icount.txt
