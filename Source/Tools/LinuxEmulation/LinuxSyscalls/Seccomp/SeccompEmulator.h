@@ -61,6 +61,10 @@ public:
   };
   ExecuteFilterResult ExecuteFilter(FEXCore::Core::CpuStateFrame* Frame, uint64_t JITPC, FEX::HLE::SyscallArguments* Args);
 
+  // Syscall User Dispatch (prctl(PR_SET_SYSCALL_USER_DISPATCH)), checked before the seccomp filters as Linux does.
+  // Lives here because it shares the SIGSYS trap delivery with SECCOMP_RET_TRAP.
+  ExecuteFilterResult ExecuteSyscallUserDispatch(FEXCore::Core::CpuStateFrame* Frame, uint64_t JITPC, uint64_t SyscallNumber);
+
   bool HasFilter(FEXCore::Core::CpuStateFrame* Frame) const {
     auto Thread = FEX::HLE::ThreadManager::GetStateObjectFromCPUState(Frame);
     return !Thread->Filters.empty();
@@ -97,6 +101,12 @@ private:
   void TSyncFilters(FEXCore::Core::CpuStateFrame* Frame);
 
   static void DumpProgram(const sock_fprog* prog);
+
+  // force_sig_info() of the SIGSYS that reports a trapped syscall (si_code SYS_SECCOMP or SYS_USER_DISPATCH).
+  void QueueTrapSignal(FEX::HLE::ThreadStateObject* Thread, int Code, uint32_t Errno, uint64_t PostSyscallRIP, uint64_t SyscallNumber,
+                       uint32_t Arch);
+  // force_exit_sig(): kill the process with Signal regardless of its handler and mask.
+  void ForceExitSignal(FEX::HLE::ThreadStateObject* Thread, int Signal);
 
   // Multiple filter instruction count penalty.
   // When multiple filters are installed there is a penalty per filter counted towards the maximum number of instructions.
