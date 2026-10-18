@@ -264,6 +264,9 @@ __attribute__((used)) static void entry_c(void) {
   // wait until the worker is running its loop before racing it
   for (int i = 0; i < 5000 && !w_started; ++i) sc6(SYS_nanosleep, (i64)&(struct timespec){0, 100000}, 0, 0, 0, 0, 0);
   check(w_started, "the worker thread started");
+  // ... and until its first trapped syscall delivered SIGSYS, so the race below really overlaps the trap loop (under an
+  // emulator the worker's first trap can take longer than the whole tgkill loop).
+  for (int i = 0; i < 5000 && !h_sys; ++i) sc6(SYS_nanosleep, (i64)&(struct timespec){0, 100000}, 0, 0, 0, 0, 0);
 
   i64 pid = sc2(SYS_getpid, 0, 0);
 #ifndef RACE_ROUNDS
@@ -291,6 +294,10 @@ __attribute__((used)) static void entry_c(void) {
   }
   check(stopped, "the worker thread stops when asked after the race (no hang)");
   check(probe_calls > 0, "the worker kept making trapped syscalls through the race");
+  // Every trapped syscall must have delivered its own SIGSYS: one lost while a racing signal is being delivered means
+  // the syscall silently "returned" to code that relies on the trap handler (Wine's syscall dispatcher).
+  if (h_sys != probe_calls) { out("  (trapped syscalls "); outdec(probe_calls); out(", SIGSYS delivered "); outdec(h_sys); out(")\n"); }
+  check(h_sys == probe_calls, "every trapped syscall delivered exactly one SIGSYS");
 
   out(failures ? "RESULT: FAIL\n" : "RESULT: PASS\n");
   sc2(SYS_exit_group, failures, 0);
