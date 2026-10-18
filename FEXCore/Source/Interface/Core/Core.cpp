@@ -334,6 +334,12 @@ void ContextImpl::SetFlagsFromCompactedEFLAGS(FEXCore::Core::InternalThreadState
       // DF is encoded as 1/-1
       Frame->State.flags[i] = (EFLAGS & (1U << i)) ? 0xff : 1;
       break;
+    case X86State::RFLAG_RF_LOC:
+      // RF only suppresses an instruction breakpoint on the next instruction, and the CPU clears it once that
+      // instruction completes. FEX has no instruction breakpoints, so a context that loads RF (a signal frame of a
+      // fault, which carries RF = 1) consumes it at once: PUSHF and later signal frames must not see it.
+      Frame->State.flags[i] = 0;
+      break;
     default: Frame->State.flags[i] = (EFLAGS & (1U << i)) ? 1 : 0; break;
     }
   }

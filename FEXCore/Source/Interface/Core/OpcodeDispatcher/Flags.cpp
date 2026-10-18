@@ -60,6 +60,10 @@ void OpDispatchBuilder::SetPackedRFLAG(bool Lower8, Ref Src) {
     } else if (FlagOffset == FEXCore::X86State::RFLAG_PF_RAW_LOC || FlagOffset == FEXCore::X86State::RFLAG_CF_RAW_LOC) {
       // PF and CF are both stored parity flipped.
       SetRFLAG(SrcInverted, FlagOffset, FlagOffset, true);
+    } else if (FlagOffset == FEXCore::X86State::RFLAG_RF_LOC) {
+      // POPF clears RF. IRET loads it, but it only suppresses an instruction breakpoint on the next instruction and
+      // the CPU clears it after that one; FEX has no instruction breakpoints, so it is never visible afterwards.
+      SetRFLAG(Constant(0), FlagOffset);
     } else {
       SetRFLAG(Src, FlagOffset, FlagOffset, true);
     }

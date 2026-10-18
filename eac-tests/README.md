@@ -53,6 +53,7 @@ eac-tests/<name>/build.sh native [output]    # where supported: built with the h
 | `restart-syscall` | `restart_syscall` returns `-EINTR` and the process survives. | 0015 |
 | `signal-frame` | The signal frame against what Linux writes: TF single-step, CS/SS `0x33`/`0x2b`, the XSAVE fpstate trailer (run a second time with `FEX_HOSTFEATURES=disableavx` for the FXSAVE frame), `ud2` → `ILL_ILLOPN`, `uc_sigmask`, a frame that does not fit the stack. | 0016–0020 |
 | `sigreturn-eflags` | `rt_sigreturn` applies EFLAGS a handler wrote (DF; TF starts single-stepping with exactly one SIGTRAP). | 0016 |
+| `fault-eflags` | EFLAGS in a fault's signal frame (RF set for #PF read/exec, #UD, #GP; clear for int3), every GPR and RIP in the frame (also right after a syscall), PUSHF after the handler shows RF clear. | 0040 |
 | `maps-probe` | Probes every inaccessible mapping listed in `/proc/self/maps` under a SIGSEGV handler: every probe returns, `si_addr` is the probed address. | 0023 |
 | `tf-iret` | Where the single-step trap lands after `POPFQ`, an `IRETQ` loading TF, Wine's `popfq; iretq`, and across cached call/ret code. | 0025 |
 | `proc-maps` | `/proc/self/maps` lists only x86-64 process mappings: everything below `TASK_SIZE_MAX` except `[vsyscall]`, every file-backed ELF mapping x86-64. | 0033 |
