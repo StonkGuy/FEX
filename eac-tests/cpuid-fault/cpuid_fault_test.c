@@ -132,6 +132,28 @@ __asm__(".text\n.globl cpuid_run\ncpuid_run:\n mov x0, xzr\n ret\n.globl cpuid_a
         ".balign 16\n.globl si_code_seen\nsi_code_seen: .quad 0\n.globl fault_rip\nfault_rip: .quad 0\n.globl fault_count\nfault_count: .quad 0\n.text\n");
 #endif
 
+// clone_thread(flags, stacktop, fn): clone(2) and, in the child, call fn on the new stack and exit. Written in assembly
+// because the child must not run any compiler-generated code of the caller: that code may address the caller's frame
+// relative to the stack pointer, which in the child points into the new stack (writes then land past its end).
+extern i64 clone_thread(u64 flags, void* stacktop, void (*fn)(void));
+#if defined(__x86_64__)
+__asm__(".text\n.balign 16\n.globl clone_thread\nclone_thread:\n"
+        "  mov %rdx, %r9\n  xor %edx, %edx\n  xor %r10d, %r10d\n  xor %r8d, %r8d\n"
+        "  mov $56, %eax\n  syscall\n"
+        "  test %rax, %rax\n  jnz 1f\n"
+        "  xor %ebp, %ebp\n  call *%r9\n"
+        "  mov $60, %eax\n  xor %edi, %edi\n  syscall\n"
+        "1:\n  ret\n");
+#else
+__asm__(".text\n.balign 16\n.globl clone_thread\nclone_thread:\n"
+        "  mov x9, x2\n  mov x2, #0\n  mov x3, #0\n  mov x4, #0\n"
+        "  mov x8, #220\n  svc 0\n"
+        "  cbnz x0, 1f\n"
+        "  blr x9\n"
+        "  mov x0, #0\n  mov x8, #93\n  svc 0\n"
+        "1:\n  ret\n");
+#endif
+
 // A CLONE_THREAD thread shares the address space, so it reports what it saw through these variables. Its first
 // CPUID must fault: the parent did ARCH_SET_CPUID(0), and Linux inherits that across clone.
 static volatile int ct_done, ct_faulted;
@@ -143,8 +165,6 @@ static void ct_child(void) {
   ct_faulted = (fault_count != 0) ? 1 : 0;
   __asm__ volatile("" ::: "memory");
   ct_done = 1;
-  sc1(SYS_exit, 0);
-  for (;;) {}
 }
 
 static void run(void) {
@@ -193,8 +213,7 @@ static void run(void) {
       check(fpid > 0 && ((status >> 8) & 0xff) == 1, "a forked child inherits CPUID faulting from its parent");
     }
     {
-      i64 pid = sc5(SYS_clone, CLONE_THREAD_FLAGS, (i64)(ct_stack + sizeof ct_stack), 0, 0, 0);
-      if (pid == 0) { ct_child(); }
+      i64 pid = clone_thread(CLONE_THREAD_FLAGS, ct_stack + sizeof ct_stack, ct_child);
       check(pid > 0, "spawn a CLONE_THREAD thread");
       for (volatile long spin = 0; !ct_done && spin < 400000000L; ++spin) {}
       check(ct_done, "the CLONE_THREAD thread ran to completion");

@@ -129,6 +129,28 @@ static i64 install_filter(void) {
   return r;
 }
 
+// clone_thread(flags, stacktop, fn): clone(2) and, in the child, call fn on the new stack and exit. Written in assembly
+// because the child must not run any compiler-generated code of the caller: that code may address the caller's frame
+// relative to the stack pointer, which in the child points into the new stack (writes then land past its end).
+extern i64 clone_thread(u64 flags, void* stacktop, void (*fn)(void));
+#if defined(__x86_64__)
+__asm__(".text\n.balign 16\n.globl clone_thread\nclone_thread:\n"
+        "  mov %rdx, %r9\n  xor %edx, %edx\n  xor %r10d, %r10d\n  xor %r8d, %r8d\n"
+        "  mov $56, %eax\n  syscall\n"
+        "  test %rax, %rax\n  jnz 1f\n"
+        "  xor %ebp, %ebp\n  call *%r9\n"
+        "  mov $60, %eax\n  xor %edi, %edi\n  syscall\n"
+        "1:\n  ret\n");
+#else
+__asm__(".text\n.balign 16\n.globl clone_thread\nclone_thread:\n"
+        "  mov x9, x2\n  mov x2, #0\n  mov x3, #0\n  mov x4, #0\n"
+        "  mov x8, #220\n  svc 0\n"
+        "  cbnz x0, 1f\n"
+        "  blr x9\n"
+        "  mov x0, #0\n  mov x8, #93\n  svc 0\n"
+        "1:\n  ret\n");
+#endif
+
 // A thread created with clone(2) has its own /proc/<tid>/status, and its Seccomp: is the process's seccomp mode,
 // exactly like the main thread's. The child runs on its own stack and hands the value back through a shared
 // variable (CLONE_VM), so the parent can check what the thread saw without parsing /proc.
@@ -142,12 +164,10 @@ static void thread_body(void) {
   sc1(SYS_exit, 0);
   for (;;) {}
 }
-// Returns the thread's tid in the parent and 0 in the thread (which never returns: it exits from thread_body).
+// Returns the thread's tid (the thread itself exits from thread_body).
 static i64 spawn_thread(void) {
   static char stk[65536] __attribute__((aligned(16)));
-  i64 r = sc5(SYS_clone, CLONE_THREAD_FLAGS, (i64)(stk + sizeof stk), 0, 0, 0);
-  if (r == 0) thread_body();
-  return r;
+  return clone_thread(CLONE_THREAD_FLAGS, stk + sizeof stk, thread_body);
 }
 
 
