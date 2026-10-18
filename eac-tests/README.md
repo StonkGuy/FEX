@@ -20,7 +20,12 @@ eac-tests/run-all.sh FEXInterpreter     # the same with an explicit runner inste
 NATIVE=1 eac-tests/run-all.sh           # on a real x86-64 Linux: the reference run, every test expects PASS
 ```
 
-`run-all.sh` exits 0 when every run gives its expected result. Per test:
+`run-all.sh` exits 0 when every run gives its expected result. A run over `TIMEOUT` seconds (default 60) is killed and
+reported as `TIMEOUT`. A test that could not exercise its feature prints `RESULT: SKIP` and the reason; that is
+accepted (and listed) only in the `NATIVE=1` run, under FEX it fails. Tests that re-exec themselves with a FEX option
+build the new environment from the actual one, so any environment size works. CI
+(`.github/workflows/eac-tests.yml`) runs the suite under FEX on an Arm64 runner and natively on an x86-64 runner, each
+with the runner's environment and with an inflated one (400 variables of 1 KiB). Per test:
 
 ```
 eac-tests/<name>/build.sh [clang] [output]   # x86-64 binary: run it under FEX, and unchanged on x86-64 Linux
@@ -70,7 +75,8 @@ Expected results (same binaries on all three):
 |---|---|---|---|
 | `ptrace-inject` | PASS | hang (timeout) | PASS |
 | `ptrace-sigbus` | not run yet | not run | PASS (FAIL on `eac-2610` before 0039) |
-| `signal-mask`, `signal-regs`, `signal-race`, `cpuid-fault`, `proc-status`, `ptrace-regsets`, `ptrace-dregs`, `signal-frame`, `sigreturn-eflags`, `tf-iret` | PASS | FAIL | PASS |
+| `cpuid-fault` | PASS with `cpuid_fault` (Intel bare metal); SKIP without it (AMD, most VMs incl. GitHub runners) | FAIL | PASS |
+| `signal-mask`, `signal-regs`, `signal-race`, `proc-status`, `ptrace-regsets`, `ptrace-dregs`, `signal-frame`, `sigreturn-eflags`, `tf-iret` | PASS | FAIL | PASS |
 | `proc-maps` | PASS (x86-64, kernel 6.19) | FAIL | PASS |
 | `smc-remote-write` | PASS (x86-64, kernel 6.19) | FAIL | PASS |
 | `smc-same-page` | PASS (x86-64, kernel 6.19) | not run (same code as eac-2610 before 0037, which fails the `+thread` cases) | PASS |

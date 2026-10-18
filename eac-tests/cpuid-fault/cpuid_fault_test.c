@@ -81,9 +81,8 @@ static void outdec(i64 v) {
   if (neg) b[n++] = '-'; char r[24]; int k = 0; while (n) r[k++] = b[--n]; r[k] = 0; out(r);
 }
 static int seq(const char* a, const char* b) { while (*a && *a == *b) { ++a; ++b; } return *a == *b; }
-static void ucopy(char* d, const char* s) { while ((*d++ = *s++)) {} }
 
-static int failures;
+static int failures, skipped;
 static void check(int ok, const char* what) {
   out(ok ? "PASS: " : "FAIL: "); out(what); out("\n"); if (!ok) ++failures;
 }
@@ -150,7 +149,7 @@ static void ct_child(void) {
 
 static void run(void) {
 #if defined(__aarch64__)
-  out("SKIP: CPUID and arch_prctl do not exist on aarch64\n");
+  out("SKIP: CPUID and arch_prctl do not exist on aarch64\n"); skipped = 1;
 #else
   struct ksigaction a = MAKE_ACTION(hsegv);
   check(sc6(SYS_rt_sigaction, SIGSEGV_, (i64)&a, 0, 8, 0, 0) == 0, "install the SIGSEGV handler (SA_SIGINFO)");
@@ -162,7 +161,10 @@ static void run(void) {
   // Turn CPUID faulting on for this thread: a CPU with the feature answers 0; without it, -ENODEV.
   i64 set0 = sc2(SYS_arch_prctl, ARCH_SET_CPUID, 0);
   if (set0 == -19 /* ENODEV */) {
-    out("SKIP: ARCH_SET_CPUID reports -ENODEV here; CPUID faulting cannot be exercised\n");
+    // Native: the CPU (or hypervisor) lacks X86_FEATURE_CPUID_FAULT, e.g. every AMD CPU and most cloud VMs.
+    // Under FEX: the CPUID-faulting support is missing. Either way nothing was tested, so the result is SKIP, not PASS.
+    out("SKIP: ARCH_SET_CPUID reports -ENODEV here (no CPUID faulting on this CPU/kernel); the fault checks did not run\n");
+    skipped = 1;
   } else {
     check(set0 == 0, "ARCH_SET_CPUID(0) returns 0");
     check(sc2(SYS_arch_prctl, ARCH_GET_CPUID, 0) == 0, "ARCH_GET_CPUID reports CPUID disabled after ARCH_SET_CPUID(0)");
@@ -210,25 +212,25 @@ static void run(void) {
   }
 #endif
 
-  out(failures ? "RESULT: FAIL\n" : "RESULT: PASS\n");
+  out(failures ? "RESULT: FAIL\n" : skipped ? "RESULT: SKIP\n" : "RESULT: PASS\n");
   sc1(SYS_exit_group, failures);
 }
 
 // ------------------------------------------------------------------------------------------------------
 // entry: re-exec with the FEX option that enables CPUID faulting, so the test is self-contained
 // ------------------------------------------------------------------------------------------------------
-static char envbuf[80][128];
-static char* newenv[84];
+// The new environment is the old one plus one entry: an array of pointers to the original strings (they stay valid
+// until execve copies them), sized from the actual environment, so any number and length of variables works.
 __attribute__((used)) static void entry_c(u64* sp) {
   u64 argc = sp[0]; char** argv = (char**)(sp + 1); char** envp = argv + argc + 1;
-  int have = 0, n = 0;
-  for (char** e = envp; *e && n < 78; ++e) {
-    if (seq(*e, "FEX_ENABLECPUIDFAULTING=1")) have = 1;
-    ucopy(envbuf[n], *e); newenv[n] = envbuf[n]; ++n;
-  }
+  u64 n = 0; int have = 0;
+  for (; envp[n]; ++n)
+    if (seq(envp[n], "FEX_ENABLECPUIDFAULTING=1")) have = 1;
   if (!have) {
-    ucopy(envbuf[n], "FEX_ENABLECPUIDFAULTING=1"); newenv[n] = envbuf[n]; ++n;
-    newenv[n] = 0;
+    static char Opt[] = "FEX_ENABLECPUIDFAULTING=1";
+    char* newenv[n + 2];
+    for (u64 i = 0; i < n; ++i) newenv[i] = envp[i];
+    newenv[n] = Opt; newenv[n + 1] = 0;
     sc3(SYS_execve, (i64)"/proc/self/exe", (i64)argv, (i64)newenv);
     // execve returned: continue and let the checks report what this environment supports
   }
