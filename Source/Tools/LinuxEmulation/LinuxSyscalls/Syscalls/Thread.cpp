@@ -44,6 +44,12 @@ $end_info$
 #include <unistd.h>
 #include <sys/fsuid.h>
 
+#ifndef PR_SET_SYSCALL_USER_DISPATCH
+#define PR_SET_SYSCALL_USER_DISPATCH 59
+#define PR_SYS_DISPATCH_OFF 0
+#define PR_SYS_DISPATCH_ON 1
+#endif
+
 ARG_TO_STR(idtype_t, "%u")
 
 namespace FEX::HLE {
@@ -493,6 +499,28 @@ void RegisterThread(FEX::HLE::SyscallHandler* Handler) {
                             return FEX::HLE::_SyscallHandler->SeccompEmulator.Handle(Frame, Operation, 0, reinterpret_cast<void*>(arg3));
                           }
                           case PR_GET_SECCOMP: return FEX::HLE::_SyscallHandler->SeccompEmulator.GetSeccomp(Frame);
+                          case PR_SET_SYSCALL_USER_DISPATCH: {
+                            // Linux's task_set_syscall_user_dispatch(). Never forwarded: the host would dispatch FEX's own syscalls.
+                            auto& SUD = FEX::HLE::ThreadManager::GetStateObjectFromCPUState(Frame)->SyscallUserDispatch;
+                            switch (arg2) {
+                            case PR_SYS_DISPATCH_OFF:
+                              if (arg3 || arg4 || arg5) {
+                                return -EINVAL;
+                              }
+                              SUD = {};
+                              return 0;
+                            case PR_SYS_DISPATCH_ON:
+                              if (arg3 && arg3 + arg4 <= arg3) {
+                                return -EINVAL;
+                              }
+                              if (arg5 && arg5 >= SyscallHandler::TASK_MAX_64BIT) {
+                                return -EFAULT;
+                              }
+                              SUD = {.Offset = arg3, .Length = arg4, .Selector = arg5, .Enabled = true};
+                              return 0;
+                            default: return -EINVAL;
+                            }
+                          }
                           case PR_GET_AUXV: {
                             if (arg4 || arg5) {
                               return -EINVAL;

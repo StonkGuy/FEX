@@ -12,7 +12,7 @@
 //   - siginfo: si_signo SIGSYS, si_code SYS_SECCOMP (1) or SYS_USER_DISPATCH (2), si_errno, si_call_addr just past the
 //     syscall, si_syscall 0x43, si_arch AUDIT_ARCH_X86_64
 //   - ucontext: rip just past the syscall, rax the syscall number, the six argument registers, the arithmetic flags set
-//     before the syscall, rsp of the trapping code
+//     before the syscall, rcx/r11 as the `syscall` instruction left them (return address, rflags), rsp of the trapping code
 //   - the signal frame lands at the same address every time (nothing leaks per trap) and the loop finishes
 // Phases:
 //   A  seccomp, Wine-style ucontext redirect to a dispatcher that performs the context switch
@@ -148,6 +148,7 @@ __attribute__((used)) static void handler(int sig, void* info, void* uc) {
   if ((GREG(uc, EFL) & FLAGS_MASK) != (FLAGS_IN & FLAGS_MASK)) bad(t, 0x200);
   if (GREG(uc, RSP) != t->c.rsp) bad(t, 0x400);
   if (GREG(uc, RBX) != (u64)t || GREG(uc, R13) != (u64)&t->counter) bad(t, 0x800);
+  if (GREG(uc, RCX) != after || GREG(uc, R11) != GREG(uc, EFL)) bad(t, 0x1000);   // what `syscall` itself left in rcx/r11
   if (t->traps == 1) {
     u64* s = t->snap;
     s[0] = si[0]; s[1] = si[1]; s[2] = si[2]; s[3] = *(u64*)((char*)info + 16); s[4] = si[6]; s[5] = si[7];
