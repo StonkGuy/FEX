@@ -516,7 +516,10 @@ void RegisterThread(FEX::HLE::SyscallHandler* Handler) {
                               if (arg5 && arg5 >= SyscallHandler::TASK_MAX_64BIT) {
                                 return -EFAULT;
                               }
-                              SUD = {.Offset = arg3, .Length = arg4, .Selector = arg5, .Enabled = true};
+                              SUD.Offset = arg3;
+                              SUD.Length = arg4;
+                              SUD.Selector = arg5;
+                              SUD.Enabled = true;
                               return 0;
                             default: return -EINVAL;
                             }
