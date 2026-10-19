@@ -333,10 +333,12 @@ bool SignalDelegator::HandleDispatcherGuestSignal(FEXCore::Core::InternalThreadS
   // itself, so the ucontext RIP now differs from it: rt_sigreturn then takes the path that restores the handler's
   // registers and resumes at the ucontext RIP, instead of the path that resets to the interrupted state and re-runs
   // the syscall (discarding the handler's return value). See SeccompEmulator for the kernel semantics.
-  // Only the trap's own SIGSYS takes it: an asynchronous signal that arrives between the filter deciding to trap and
-  // the SIGSYS being delivered must see the interrupted state (RIP at the `syscall`), otherwise its handler returns
-  // past the syscall and the trap is skipped without its SIGSYS ever reaching the guest.
-  if (Signal == SIGSYS && static_cast<siginfo_t*>(info)->si_code == 1 /* SYS_SECCOMP */) {
+  // Only the trap's own SIGSYS (seccomp or Syscall User Dispatch) takes it: an asynchronous signal that arrives
+  // between the filter deciding to trap and the SIGSYS being delivered must see the interrupted state (RIP at the
+  // `syscall`), otherwise its handler returns past the syscall and the trap is skipped without its SIGSYS ever
+  // reaching the guest.
+  const int SigSysCode = Signal == SIGSYS ? static_cast<siginfo_t*>(info)->si_code : 0;
+  if (SigSysCode == 1 /* SYS_SECCOMP */ || SigSysCode == 2 /* SYS_USER_DISPATCH */) {
     ContextBackup->SeccompTrapRIP = ThreadObject->SeccompTrapRIP;
     ThreadObject->SeccompTrapRIP = 0;
   }
