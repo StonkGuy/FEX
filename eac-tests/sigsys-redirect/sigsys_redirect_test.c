@@ -17,7 +17,8 @@
 // Phases:
 //   A  seccomp, Wine-style ucontext redirect to a dispatcher that performs the context switch
 //   B  as A, handler on a sigaltstack (Wine runs its handlers with SA_ONSTACK)
-//   C  seccomp, the handler switches context itself and never returns (no rt_sigreturn: longjmp-style escape)
+//   C  seccomp, the handler switches context itself and never returns (no rt_sigreturn: longjmp-style escape); the
+//      process must not grow while it does
 //   D  seccomp, nested: every 1000th trap the handler (SA_NODEFER) makes a trapped syscall of its own
 //   E  seccomp, four threads in the A loop at once
 //   F  Syscall User Dispatch (Wine 11), Wine-style redirect, selector byte toggled like Wine
@@ -66,6 +67,25 @@ static void outhex(u64 v) {
   char b[19]; b[0] = '0'; b[1] = 'x';
   for (int i = 0; i < 16; ++i) { int d = (v >> (60 - 4 * i)) & 15; b[2 + i] = d < 10 ? '0' + d : 'a' + d - 10; }
   b[18] = 0; out(b);
+}
+// VmRSS in KiB from /proc/self/status, -1 when unavailable.
+static i64 rss_kib(void) {
+  static char buf[4096];
+  i64 fd = sc3(2 /* open */, "/proc/self/status", 0, 0);
+  if (fd < 0) return -1;
+  i64 n = sc3(0 /* read */, fd, buf, sizeof buf - 1);
+  sc2(3 /* close */, fd, 0);
+  if (n <= 0) return -1;
+  buf[n] = 0;
+  for (i64 i = 0; i + 6 < n; ++i) {
+    if (buf[i] == 'V' && buf[i + 1] == 'm' && buf[i + 2] == 'R' && buf[i + 3] == 'S' && buf[i + 4] == 'S' && buf[i + 5] == ':') {
+      i64 v = 0;
+      for (i += 6; buf[i] == ' ' || buf[i] == '\t'; ++i) {}
+      for (; buf[i] >= '0' && buf[i] <= '9'; ++i) v = v * 10 + (buf[i] - '0');
+      return v;
+    }
+  }
+  return -1;
 }
 static int failures;
 static void check(int ok, const char* what) { out(ok ? "PASS: " : "FAIL: "); out(what); out("\n"); if (!ok) ++failures; }
@@ -303,8 +323,16 @@ __attribute__((used)) void entry_c(void) {
     ss.flags = 2; /* SS_DISABLE */ sc2(SYS_sigaltstack, &ss, 0);
   }
 
-  g_mode = 'C'; set_handler(0); prep(&T[0], (u64)main_exit); run_loop(&T[0].c); report(&T[0], "C", 0);
-  check(phase_ok(&T[0]), "C: 200000 traps whose handler switches context and never returns (no rt_sigreturn)");
+  {
+    // Nothing may be kept per abandoned frame: natively the process does not grow at all here. Under an emulator that
+    // keeps host state per guest signal frame, 200000 abandoned frames of a few KiB each add hundreds of MiB.
+    const i64 rss0 = rss_kib();
+    g_mode = 'C'; set_handler(0); prep(&T[0], (u64)main_exit); run_loop(&T[0].c); report(&T[0], "C", 0);
+    const i64 grew = rss_kib() - rss0;
+    out("  rss_growth_kib="); outhex((u64)grew); out("\n");
+    check(phase_ok(&T[0]), "C: 200000 traps whose handler switches context and never returns (no rt_sigreturn)");
+    check(rss0 > 0 && grew < 32768, "C: abandoned signal frames do not accumulate (resident size grows < 32 MiB)");
+  }
 
   g_mode = 'D'; set_handler(SA_NODEFER); prep(&T[0], (u64)main_exit); run_loop(&T[0].c); report(&T[0], "D", 0);
   out("  nested_ok="); outhex(T[0].nested_ok); out(" nested_bad="); outhex(T[0].nested_bad); out("\n");
