@@ -85,6 +85,20 @@ static void outhex(u64 v) {
   b[18] = 0; out(b);
 }
 
+// 5-level paging (LA57): the user address space is 56 bits instead of 47, so TASK_SIZE_MAX is (1 << 56) - 4096. Some
+// x86-64 hosts (e.g. Ice Lake cloud VMs) run with it; FEX always presents the 47-bit layout. A hint above 47 bits is
+// only honoured with LA57 (arch/x86/mm/mmap.c), which is how this is detected.
+static int host_la57(void) {
+#if defined(__x86_64__)
+  i64 p = sc6_(SYS_mmap, 1L << 52, 4096, 3 /* RW */, 0x22 /* MAP_PRIVATE|MAP_ANONYMOUS */, -1, 0);
+  if (p < 0 && p > -4096) return 0;
+  sc6_(11 /* munmap */, p, 4096, 0, 0, 0, 0);
+  return (u64)p >= (1UL << 47);
+#else
+  return 0;
+#endif
+}
+
 static int failures;
 static void check(int ok, const char* what) {
   out(ok ? "PASS: " : "FAIL: "); out(what); out("\n"); if (!ok) ++failures;
@@ -144,8 +158,14 @@ __attribute__((used)) static void entry_c(void) {
   {
     i64 child = spawn_traced();
     check(poke_user(child, OFF_DR0, VA) == 0, "POKEUSER of a valid DR0 address succeeds");
-    const u64 bad[5] = {0xdeadbeefcafe1234UL, 0x0000800000000000UL /* non-canonical */, 0xffff800000000000UL /* kernel */, ~0UL, 0x00007ffffffffffeUL /* at TASK_SIZE_MAX-1 */};
-    const char* bnames[5] = {"0xdeadbeefcafe1234", "0x800000000000 (non-canonical)", "0xffff800000000000 (kernel)", "~0", "0x7ffffffffffe (at TASK_SIZE_MAX)"};
+    const u64 bad47[5] = {0xdeadbeefcafe1234UL, 0x0000800000000000UL /* non-canonical */, 0xffff800000000000UL /* kernel */, ~0UL, 0x00007ffffffffffeUL /* at TASK_SIZE_MAX-1 */};
+    const char* bnames47[5] = {"0xdeadbeefcafe1234", "0x800000000000 (non-canonical)", "0xffff800000000000 (kernel)", "~0", "0x7ffffffffffe (at TASK_SIZE_MAX)"};
+    const u64 bad57[5] = {0xdeadbeefcafe1234UL, 0x0100000000000000UL /* non-canonical */, 0xff00000000000000UL /* kernel */, ~0UL, 0x00fffffffffffffeUL /* at TASK_SIZE_MAX-1 */};
+    const char* bnames57[5] = {"0xdeadbeefcafe1234", "0x100000000000000 (non-canonical, LA57)", "0xff00000000000000 (kernel, LA57)", "~0", "0xfffffffffffffe (at TASK_SIZE_MAX, LA57)"};
+    const int la57 = host_la57();
+    if (la57) out("info: host uses 5-level paging (LA57); the invalid addresses are the 56-bit ones\n");
+    const u64* bad = la57 ? bad57 : bad47;
+    const char* const* bnames = la57 ? bnames57 : bnames47;
     int all_inval = 1;
     for (int i = 0; i < 5; ++i) {
       i64 w = poke_user(child, OFF_DR0 + 8, bad[i]);

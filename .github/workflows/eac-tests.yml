@@ -1,0 +1,90 @@
+name: eac-tests (FEX on Arm64 + native x86-64 oracle)
+
+# Runs the eac-tests suite (eac-tests/run-all.sh) under this branch's FEX on an Arm64 runner, the FEX ASM tests, and
+# the same suite natively on an x86-64 runner as the reference. Every suite runs twice: with the runner's own
+# environment and with an inflated one (400 variables of 1 KiB), so tests that re-exec themselves are checked against
+# large environments.
+
+on:
+  pull_request:
+    branches: [ eac-2610 ]
+  push:
+    branches: [ eac-2610 ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: eac-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    name: native x86-64 reference
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+    - uses: actions/checkout@v4
+    - name: Tools
+      run: sudo apt-get update -qq && sudo apt-get install -y -qq clang lld >/dev/null
+    - name: Host
+      run: |
+        grep -m1 "model name" /proc/cpuinfo; uname -r
+        grep -o -w cpuid_fault /proc/cpuinfo | head -1 || echo "no cpuid_fault flag: cpuid-fault reports SKIP natively"
+        echo "environment: $(env | wc -l) variables, $(env | wc -c) bytes"
+    - name: run-all (runner environment)
+      run: cd eac-tests && NATIVE=1 OUT=$PWD/build ./run-all.sh
+    - name: run-all (inflated environment)
+      if: always()
+      run: |
+        cd eac-tests
+        eval "$(python3 -c 'print("".join(f"export EACTEST_PAD_{i}={chr(65 + i % 26) * 1024}\n" for i in range(400)))')"
+        echo "environment: $(env | wc -l) variables, $(env | wc -c) bytes"
+        NATIVE=1 OUT=$PWD/build ./run-all.sh
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with: { name: native-logs, path: eac-tests/build/*.log }
+
+  fex:
+    name: FEX on Arm64
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@v4
+      with: { submodules: recursive }
+    - name: Tools
+      run: sudo apt-get update -qq && sudo apt-get install -y -qq clang lld ninja-build cmake python3 nasm >/dev/null
+    - name: Host
+      run: |
+        lscpu | grep -E "Model name|Flags" | cut -c1-200; uname -r
+        echo "environment: $(env | wc -l) variables, $(env | wc -c) bytes"
+    - name: Build FEX
+      run: |
+        cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+          -DBUILD_TESTING=ON -DBUILD_THUNKS=OFF -DBUILD_FEXCONFIG=OFF -DENABLE_LTO=OFF -DENABLE_ASSERTIONS=OFF \
+          -DCMAKE_CXX_SCAN_FOR_MODULES=OFF -DUSE_LINKER=lld >/dev/null
+        set +e; cmake --build build -j$(nproc) > build.log 2>&1; rc=$?
+        grep -E -A5 "error:|FAILED" build.log | head -60; tail -2 build.log; exit $rc
+    - name: run-all under FEX (runner environment)
+      run: cd eac-tests && OUT=$PWD/build ./run-all.sh $GITHUB_WORKSPACE/build/Bin/FEX
+    - name: run-all under FEX (inflated environment)
+      if: always()
+      run: |
+        cd eac-tests
+        eval "$(python3 -c 'print("".join(f"export EACTEST_PAD_{i}={chr(65 + i % 26) * 1024}\n" for i in range(400)))')"
+        echo "environment: $(env | wc -l) variables, $(env | wc -c) bytes"
+        OUT=$PWD/build ./run-all.sh $GITHUB_WORKSPACE/build/Bin/FEX
+    - name: FEX ASM tests (64-bit and 32-bit)
+      if: always()
+      run: |
+        cd build
+        set +e; ctest -j$(nproc) --timeout 60 -R "Test_(32|64)Bit_" > ../asm.txt 2>&1; rc=$?
+        grep -E "tests passed|\(Failed\)|\(Timeout\)|Exception" ../asm.txt | tail -60; exit $rc
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: fex-logs
+        path: |
+          eac-tests/build/*.log
+          asm.txt
