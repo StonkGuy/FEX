@@ -97,13 +97,15 @@ __attribute__((used)) static void entry_c(void) {
   check(r == 0 && v.len == 27 * 8, "NT_PRSTATUS returns the register image");
 
   // (2) NT_X86_XSTATE is a known x86-64 regset and must succeed, not fail with -EPERM
-  static u64 xstate[512];
+  // Big enough for the whole xsave area of any current CPU (AMX tile data alone is 8 KiB): Linux only accepts a
+  // SETREGSET of the full size, so a truncated read cannot be written back on CPUs with a large xsave area.
+  static u64 xstate[4096];
   struct iov vx = {xstate, sizeof(xstate)};
   i64 rx = ptrace(PT_GETREGSET, child, NT_X86_XSTATE_, (i64)&vx);
   check(rx == 0, "NT_X86_XSTATE succeeds (the xsave regset is known on x86-64)");
   if (rx != 0) { out("  (GETREGSET NT_X86_XSTATE returned "); outdec(rx); out(")\n"); }
   check(rx == 0 && vx.len > 0, "NT_X86_XSTATE returns a positive length");
-  struct iov vsx = {xstate, sizeof(xstate)};
+  struct iov vsx = {xstate, vx.len};   // write back exactly what was read
   check(ptrace(PT_SETREGSET, child, NT_X86_XSTATE_, (i64)&vsx) == 0, "NT_X86_XSTATE can be written back");
 
   // (3) an unknown regset type is -EINVAL, exactly as ptrace_regset() returns

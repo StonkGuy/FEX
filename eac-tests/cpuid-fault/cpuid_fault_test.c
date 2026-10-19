@@ -81,9 +81,8 @@ static void outdec(i64 v) {
   if (neg) b[n++] = '-'; char r[24]; int k = 0; while (n) r[k++] = b[--n]; r[k] = 0; out(r);
 }
 static int seq(const char* a, const char* b) { while (*a && *a == *b) { ++a; ++b; } return *a == *b; }
-static void ucopy(char* d, const char* s) { while ((*d++ = *s++)) {} }
 
-static int failures;
+static int failures, skipped;
 static void check(int ok, const char* what) {
   out(ok ? "PASS: " : "FAIL: "); out(what); out("\n"); if (!ok) ++failures;
 }
@@ -133,6 +132,28 @@ __asm__(".text\n.globl cpuid_run\ncpuid_run:\n mov x0, xzr\n ret\n.globl cpuid_a
         ".balign 16\n.globl si_code_seen\nsi_code_seen: .quad 0\n.globl fault_rip\nfault_rip: .quad 0\n.globl fault_count\nfault_count: .quad 0\n.text\n");
 #endif
 
+// clone_thread(flags, stacktop, fn): clone(2) and, in the child, call fn on the new stack and exit. Written in assembly
+// because the child must not run any compiler-generated code of the caller: that code may address the caller's frame
+// relative to the stack pointer, which in the child points into the new stack (writes then land past its end).
+extern i64 clone_thread(u64 flags, void* stacktop, void (*fn)(void));
+#if defined(__x86_64__)
+__asm__(".text\n.balign 16\n.globl clone_thread\nclone_thread:\n"
+        "  mov %rdx, %r9\n  xor %edx, %edx\n  xor %r10d, %r10d\n  xor %r8d, %r8d\n"
+        "  mov $56, %eax\n  syscall\n"
+        "  test %rax, %rax\n  jnz 1f\n"
+        "  xor %ebp, %ebp\n  call *%r9\n"
+        "  mov $60, %eax\n  xor %edi, %edi\n  syscall\n"
+        "1:\n  ret\n");
+#else
+__asm__(".text\n.balign 16\n.globl clone_thread\nclone_thread:\n"
+        "  mov x9, x2\n  mov x2, #0\n  mov x3, #0\n  mov x4, #0\n"
+        "  mov x8, #220\n  svc 0\n"
+        "  cbnz x0, 1f\n"
+        "  blr x9\n"
+        "  mov x0, #0\n  mov x8, #93\n  svc 0\n"
+        "1:\n  ret\n");
+#endif
+
 // A CLONE_THREAD thread shares the address space, so it reports what it saw through these variables. Its first
 // CPUID must fault: the parent did ARCH_SET_CPUID(0), and Linux inherits that across clone.
 static volatile int ct_done, ct_faulted;
@@ -144,13 +165,11 @@ static void ct_child(void) {
   ct_faulted = (fault_count != 0) ? 1 : 0;
   __asm__ volatile("" ::: "memory");
   ct_done = 1;
-  sc1(SYS_exit, 0);
-  for (;;) {}
 }
 
 static void run(void) {
 #if defined(__aarch64__)
-  out("SKIP: CPUID and arch_prctl do not exist on aarch64\n");
+  out("SKIP: CPUID and arch_prctl do not exist on aarch64\n"); skipped = 1;
 #else
   struct ksigaction a = MAKE_ACTION(hsegv);
   check(sc6(SYS_rt_sigaction, SIGSEGV_, (i64)&a, 0, 8, 0, 0) == 0, "install the SIGSEGV handler (SA_SIGINFO)");
@@ -162,7 +181,10 @@ static void run(void) {
   // Turn CPUID faulting on for this thread: a CPU with the feature answers 0; without it, -ENODEV.
   i64 set0 = sc2(SYS_arch_prctl, ARCH_SET_CPUID, 0);
   if (set0 == -19 /* ENODEV */) {
-    out("SKIP: ARCH_SET_CPUID reports -ENODEV here; CPUID faulting cannot be exercised\n");
+    // Native: the CPU (or hypervisor) lacks X86_FEATURE_CPUID_FAULT, e.g. every AMD CPU and most cloud VMs.
+    // Under FEX: the CPUID-faulting support is missing. Either way nothing was tested, so the result is SKIP, not PASS.
+    out("SKIP: ARCH_SET_CPUID reports -ENODEV here (no CPUID faulting on this CPU/kernel); the fault checks did not run\n");
+    skipped = 1;
   } else {
     check(set0 == 0, "ARCH_SET_CPUID(0) returns 0");
     check(sc2(SYS_arch_prctl, ARCH_GET_CPUID, 0) == 0, "ARCH_GET_CPUID reports CPUID disabled after ARCH_SET_CPUID(0)");
@@ -191,8 +213,7 @@ static void run(void) {
       check(fpid > 0 && ((status >> 8) & 0xff) == 1, "a forked child inherits CPUID faulting from its parent");
     }
     {
-      i64 pid = sc5(SYS_clone, CLONE_THREAD_FLAGS, (i64)(ct_stack + sizeof ct_stack), 0, 0, 0);
-      if (pid == 0) { ct_child(); }
+      i64 pid = clone_thread(CLONE_THREAD_FLAGS, ct_stack + sizeof ct_stack, ct_child);
       check(pid > 0, "spawn a CLONE_THREAD thread");
       for (volatile long spin = 0; !ct_done && spin < 400000000L; ++spin) {}
       check(ct_done, "the CLONE_THREAD thread ran to completion");
@@ -210,25 +231,25 @@ static void run(void) {
   }
 #endif
 
-  out(failures ? "RESULT: FAIL\n" : "RESULT: PASS\n");
+  out(failures ? "RESULT: FAIL\n" : skipped ? "RESULT: SKIP\n" : "RESULT: PASS\n");
   sc1(SYS_exit_group, failures);
 }
 
 // ------------------------------------------------------------------------------------------------------
 // entry: re-exec with the FEX option that enables CPUID faulting, so the test is self-contained
 // ------------------------------------------------------------------------------------------------------
-static char envbuf[80][128];
-static char* newenv[84];
+// The new environment is the old one plus one entry: an array of pointers to the original strings (they stay valid
+// until execve copies them), sized from the actual environment, so any number and length of variables works.
 __attribute__((used)) static void entry_c(u64* sp) {
   u64 argc = sp[0]; char** argv = (char**)(sp + 1); char** envp = argv + argc + 1;
-  int have = 0, n = 0;
-  for (char** e = envp; *e && n < 78; ++e) {
-    if (seq(*e, "FEX_ENABLECPUIDFAULTING=1")) have = 1;
-    ucopy(envbuf[n], *e); newenv[n] = envbuf[n]; ++n;
-  }
+  u64 n = 0; int have = 0;
+  for (; envp[n]; ++n)
+    if (seq(envp[n], "FEX_ENABLECPUIDFAULTING=1")) have = 1;
   if (!have) {
-    ucopy(envbuf[n], "FEX_ENABLECPUIDFAULTING=1"); newenv[n] = envbuf[n]; ++n;
-    newenv[n] = 0;
+    static char Opt[] = "FEX_ENABLECPUIDFAULTING=1";
+    char* newenv[n + 2];
+    for (u64 i = 0; i < n; ++i) newenv[i] = envp[i];
+    newenv[n] = Opt; newenv[n + 1] = 0;
     sc3(SYS_execve, (i64)"/proc/self/exe", (i64)argv, (i64)newenv);
     // execve returned: continue and let the checks report what this environment supports
   }

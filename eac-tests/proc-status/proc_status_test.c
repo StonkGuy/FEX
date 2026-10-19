@@ -83,7 +83,7 @@ static int starts(const char* line, const char* end, const char* key) {
   return 1;
 }
 
-static int failures;
+static int failures, skipped;
 static void check(int ok, const char* what) {
   out(ok ? "PASS: " : "FAIL: "); out(what); out("\n"); if (!ok) ++failures;
 }
@@ -129,6 +129,28 @@ static i64 install_filter(void) {
   return r;
 }
 
+// clone_thread(flags, stacktop, fn): clone(2) and, in the child, call fn on the new stack and exit. Written in assembly
+// because the child must not run any compiler-generated code of the caller: that code may address the caller's frame
+// relative to the stack pointer, which in the child points into the new stack (writes then land past its end).
+extern i64 clone_thread(u64 flags, void* stacktop, void (*fn)(void));
+#if defined(__x86_64__)
+__asm__(".text\n.balign 16\n.globl clone_thread\nclone_thread:\n"
+        "  mov %rdx, %r9\n  xor %edx, %edx\n  xor %r10d, %r10d\n  xor %r8d, %r8d\n"
+        "  mov $56, %eax\n  syscall\n"
+        "  test %rax, %rax\n  jnz 1f\n"
+        "  xor %ebp, %ebp\n  call *%r9\n"
+        "  mov $60, %eax\n  xor %edi, %edi\n  syscall\n"
+        "1:\n  ret\n");
+#else
+__asm__(".text\n.balign 16\n.globl clone_thread\nclone_thread:\n"
+        "  mov x9, x2\n  mov x2, #0\n  mov x3, #0\n  mov x4, #0\n"
+        "  mov x8, #220\n  svc 0\n"
+        "  cbnz x0, 1f\n"
+        "  blr x9\n"
+        "  mov x0, #0\n  mov x8, #93\n  svc 0\n"
+        "1:\n  ret\n");
+#endif
+
 // A thread created with clone(2) has its own /proc/<tid>/status, and its Seccomp: is the process's seccomp mode,
 // exactly like the main thread's. The child runs on its own stack and hands the value back through a shared
 // variable (CLONE_VM), so the parent can check what the thread saw without parsing /proc.
@@ -142,15 +164,12 @@ static void thread_body(void) {
   sc1(SYS_exit, 0);
   for (;;) {}
 }
-// Returns the thread's tid in the parent and 0 in the thread (which never returns: it exits from thread_body).
+// Returns the thread's tid (the thread itself exits from thread_body).
 static i64 spawn_thread(void) {
   static char stk[65536] __attribute__((aligned(16)));
-  i64 r = sc5(SYS_clone, CLONE_THREAD_FLAGS, (i64)(stk + sizeof stk), 0, 0, 0);
-  if (r == 0) thread_body();
-  return r;
+  return clone_thread(CLONE_THREAD_FLAGS, stk + sizeof stk, thread_body);
 }
 
-static void ucopy(char* d, const char* s) { while ((*d++ = *s++)) {} }
 
 static void run(void) {
   char v[64];
@@ -171,7 +190,7 @@ static void run(void) {
   // (4) After the guest installs a filter, Seccomp: must read 2 (SECCOMP_MODE_FILTER), not the stale host 0.
   i64 ir = install_filter();
   if (ir != 0) {
-    out("SKIP: could not install a seccomp filter here (errno "); outdec(-ir); out(")\n");
+    out("SKIP: could not install a seccomp filter here (errno "); outdec(-ir); out(")\n"); skipped = 1;
   } else {
     check(status_value("Seccomp:", v, sizeof(v)) == 0, "Seccomp: is readable after installing a filter");
     check(parse_dec(v) == 2, "Seccomp: is 2 (SECCOMP_MODE_FILTER) after the guest installs a filter");
@@ -185,25 +204,25 @@ static void run(void) {
     check(thread_seccomp == 2, "a clone'd thread also reports Seccomp: 2 after the filter is installed");
   }
 
-  out(failures ? "RESULT: FAIL\n" : "RESULT: PASS\n");
+  out(failures ? "RESULT: FAIL\n" : skipped ? "RESULT: SKIP\n" : "RESULT: PASS\n");
   sc1(SYS_exit_group, failures);
 }
 
 // ------------------------------------------------------------------------------------------------------
 // entry: re-exec with FEX_NEEDSSECCOMP=1, so the test is self-contained
 // ------------------------------------------------------------------------------------------------------
-static char envbuf[80][128];
-static char* newenv[84];
+// The new environment is the old one plus one entry: an array of pointers to the original strings (they stay valid
+// until execve copies them), sized from the actual environment, so any number and length of variables works.
 __attribute__((used)) static void entry_c(u64* sp) {
   u64 argc = sp[0]; char** argv = (char**)(sp + 1); char** envp = argv + argc + 1;
-  int have = 0, n = 0;
-  for (char** e = envp; *e && n < 78; ++e) {
-    if (seq(*e, "FEX_NEEDSSECCOMP=1")) have = 1;
-    ucopy(envbuf[n], *e); newenv[n] = envbuf[n]; ++n;
-  }
+  u64 n = 0; int have = 0;
+  for (; envp[n]; ++n)
+    if (seq(envp[n], "FEX_NEEDSSECCOMP=1")) have = 1;
   if (!have) {
-    ucopy(envbuf[n], "FEX_NEEDSSECCOMP=1"); newenv[n] = envbuf[n]; ++n;
-    newenv[n] = 0;
+    static char Opt[] = "FEX_NEEDSSECCOMP=1";
+    char* newenv[n + 2];
+    for (u64 i = 0; i < n; ++i) newenv[i] = envp[i];
+    newenv[n] = Opt; newenv[n + 1] = 0;
     sc3(SYS_execve, (i64)"/proc/self/exe", (i64)argv, (i64)newenv);
     // execve returned: continue and let the checks report what this environment supports
   }

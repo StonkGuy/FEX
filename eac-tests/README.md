@@ -20,7 +20,12 @@ eac-tests/run-all.sh FEXInterpreter     # the same with an explicit runner inste
 NATIVE=1 eac-tests/run-all.sh           # on a real x86-64 Linux: the reference run, every test expects PASS
 ```
 
-`run-all.sh` exits 0 when every run gives its expected result. Per test:
+`run-all.sh` exits 0 when every run gives its expected result. A run over `TIMEOUT` seconds (default 60) is killed and
+reported as `TIMEOUT`. A test that could not exercise its feature prints `RESULT: SKIP` and the reason; that is
+accepted (and listed) only in the `NATIVE=1` run, under FEX it fails. Tests that re-exec themselves with a FEX option
+build the new environment from the actual one, so any environment size works. CI
+(`.github/workflows/eac-tests.yml`) runs the suite under FEX on an Arm64 runner and natively on an x86-64 runner, each
+with the runner's environment and with an inflated one (400 variables of 1 KiB). Per test:
 
 ```
 eac-tests/<name>/build.sh [clang] [output]   # x86-64 binary: run it under FEX, and unchanged on x86-64 Linux
@@ -39,7 +44,7 @@ eac-tests/<name>/build.sh native [output]    # where supported: built with the h
 | `seccomp-trap-noexec` | A trapped syscall is never executed (a trapped `uname()` leaves its buffer untouched). Run with `FEX_NEEDSSECCOMP=1`. | 0010 |
 | `seccomp-trap-blocked` | A trapped syscall is never executed, and a blocked or ignored SIGSYS is forced like Linux does (`force_sig_seccomp`): the process dies from SIGSYS. Run with `FEX_NEEDSSECCOMP=1`. | 0036 |
 | `execve-seccomp` | With a seccomp filter installed, a path `execve` of an ELF and of a `#!` script and an `execveat` of an FD (with and without `FD_CLOEXEC`) start the new program with the filter, the inherited FDs and no FD_CLOEXEC FD. Run with `FEX_NEEDSSECCOMP=1`. | 0038 |
-| `signal-race` | A thread looping trapped syscalls while another hammers it with SIGUSR1 can still be stopped (the shape of Wine's `NtGetContextThread`). Run with `FEX_NEEDSSECCOMP=1`. | 0010, 0022 |
+| `signal-race` | A thread looping trapped syscalls while another hammers it with SIGUSR1 can still be stopped (the shape of Wine's `NtGetContextThread`), and every trapped syscall delivers exactly one SIGSYS. Run with `FEX_NEEDSSECCOMP=1`. | 0010, 0022 |
 | `fdexec-argv` | `fexecve()` (`execveat(fd, "", AT_EMPTY_PATH)`), the same with an `FD_CLOEXEC` fd, `execve("/proc/self/fd/N")` and a path `execve` pass argv (including argv[0]) and envp unchanged. Run with and without FEX's binfmt_misc registration. | 0039 |
 | `cpuid-fault` | `arch_prctl(ARCH_SET_CPUID/ARCH_GET_CPUID)`: a CPUID faults as SIGSEGV/`SI_KERNEL` while disabled. Re-execs itself with `FEX_ENABLECPUIDFAULTING=1`. A host CPU without `cpuid_fault` reports SKIP natively. | 0011 |
 | `munmap-4g` | x86-64 munmap across 4 GiB, with holes, at the 4 GiB boundary, MAP_32BIT reuse, overflowing lengths. | #5847 |
@@ -70,7 +75,8 @@ Expected results (same binaries on all three):
 |---|---|---|---|
 | `ptrace-inject` | PASS | hang (timeout) | PASS |
 | `ptrace-sigbus` | not run yet | not run | PASS (FAIL on `eac-2610` before 0039) |
-| `signal-mask`, `signal-regs`, `signal-race`, `cpuid-fault`, `proc-status`, `ptrace-regsets`, `ptrace-dregs`, `signal-frame`, `sigreturn-eflags`, `tf-iret` | PASS | FAIL | PASS |
+| `cpuid-fault` | PASS with `cpuid_fault` (Intel bare metal); SKIP without it (AMD, most VMs incl. GitHub runners) | FAIL | PASS |
+| `signal-mask`, `signal-regs`, `signal-race`, `proc-status`, `ptrace-regsets`, `ptrace-dregs`, `signal-frame`, `sigreturn-eflags`, `tf-iret` | PASS | FAIL | PASS |
 | `proc-maps` | PASS (x86-64, kernel 6.19) | FAIL | PASS |
 | `smc-remote-write` | PASS (x86-64, kernel 6.19) | FAIL | PASS |
 | `smc-same-page` | PASS (x86-64, kernel 6.19) | not run (same code as eac-2610 before 0037, which fails the `+thread` cases) | PASS |
