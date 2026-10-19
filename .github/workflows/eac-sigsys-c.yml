@@ -1,0 +1,32 @@
+name: sigsys-redirect phase C loop
+on:
+  push:
+    branches: [ ci/sigsys-c ]
+jobs:
+  fex:
+    runs-on: ubuntu-24.04-arm
+    steps:
+    - uses: actions/checkout@v4
+      with: { submodules: recursive, path: fex }
+    - run: sudo apt-get update -qq && sudo apt-get install -y -qq clang lld ninja-build cmake python3 >/dev/null
+    - run: |
+        cd fex
+        cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+          -DBUILD_TESTING=OFF -DBUILD_THUNKS=OFF -DBUILD_FEXCONFIG=OFF -DENABLE_LTO=OFF -DENABLE_ASSERTIONS=OFF \
+          -DCMAKE_CXX_SCAN_FOR_MODULES=OFF -DUSE_LINKER=lld >/dev/null
+        cmake --build build -j$(nproc) > ../build.log 2>&1 || { tail -30 ../build.log; exit 1; }
+    - run: |
+        mkdir -p r; sh fex/eac-tests/sigsys-redirect/build.sh clang r/t >/dev/null
+        nproc; uname -r
+        crash=0
+        for i in $(seq 1 200); do
+          FEX_NEEDSSECCOMP=1 timeout 120 fex/build/Bin/FEX r/t > r/o.txt 2>&1; rc=$?
+          if [ $rc -ne 0 ]; then crash=$((crash+1)); echo "=== run $i rc=$rc"; grep -v "^  " r/o.txt | tail -8; cp r/o.txt r/fail-$i.txt; fi
+        done
+        echo "failures: $crash/200"
+        # parallel load, like the guest
+        for i in $(seq 1 100); do (FEX_NEEDSSECCOMP=1 timeout 120 fex/build/Bin/FEX r/t > r/p-$i.txt 2>&1; echo "rc=$?" >> r/p-$i.txt) & if [ $((i % 4)) = 0 ]; then wait; fi; done; wait
+        echo "parallel failures: $(grep -L 'rc=0' r/p-*.txt | wc -l)/100"; for f in $(grep -L 'rc=0' r/p-*.txt); do echo "== $f"; grep -v '^  ' $f | tail -6; done
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with: { name: r, path: r }
