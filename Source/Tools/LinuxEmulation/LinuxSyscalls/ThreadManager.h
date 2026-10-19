@@ -115,6 +115,20 @@ struct ThreadStateObject : public FEXCore::Allocator::FEXAllocOperators {
   // drop abandoned syscall-handler frames instead of leaking them.
   uint64_t JITStackSP {};
 
+  // Guest frames of the synchronous SIGSYS of trapped syscalls (seccomp or Syscall User Dispatch) whose handler has not
+  // done rt_sigreturn yet, newest last. A handler may never return: it can switch to another context instead (Wine and
+  // Windows code do this for NtContinue). Linux keeps nothing besides the guest frame, but FEX keeps the frame's host
+  // state on the host stack, so delivery uses this to find frames the guest has abandoned and reuse their host stack.
+  struct TrapSignalFrame {
+    uint64_t GuestFrame;   ///< guest RSP the handler was entered with (the frame lies at and above it)
+    uint64_t GuestRSP;     ///< guest RSP of the code that made the trapped syscall
+    uint64_t JITStackSP;   ///< JITStackSP of that code (the host stack level it ran at)
+    uint64_t ContextBackup; ///< host address of the frame's ContextBackup
+  };
+  static constexpr size_t MaxTrapSignalFrames = 16;
+  TrapSignalFrame TrapSignalFrames[MaxTrapSignalFrames] {};
+  size_t TrapSignalFrameCount {};
+
   // personality emulation.
   uint32_t persona {};
 

@@ -262,6 +262,17 @@ void SignalDelegator::RestoreThreadState(FEXCore::Core::InternalThreadState* Thr
   uintptr_t NewSP = OldSP;
   auto Context = reinterpret_cast<ArchHelpers::Context::ContextBackup*>(NewSP);
 
+  if (Type != RestoreType::TYPE_PAUSE) {
+    // A trap frame that returns is no longer outstanding, nor is any newer one (those were abandoned).
+    auto ThreadObject = FEX::HLE::ThreadManager::GetStateObjectFromFEXCoreThread(Thread);
+    for (size_t i = ThreadObject->TrapSignalFrameCount; i > 0; --i) {
+      if (ThreadObject->TrapSignalFrames[i - 1].ContextBackup == NewSP) {
+        ThreadObject->TrapSignalFrameCount = i - 1;
+        break;
+      }
+    }
+  }
+
   // Restore host state
   ArchHelpers::Context::RestoreContext(ucontext, Context);
   // Put back the InSyscallInfo of the interrupted code. The current value belongs to the rt_sigreturn syscall op, whose
@@ -324,6 +335,32 @@ bool SignalDelegator::HandleDispatcherGuestSignal(FEXCore::Core::InternalThreadS
                                                   GuestSigAction* GuestAction, stack_t* GuestStack) {
   auto ThreadObject = FEX::HLE::ThreadManager::GetStateObjectFromFEXCoreThread(Thread);
 
+  // The synchronous SIGSYS of a trapped syscall is raised from the C++ half of the syscall handler. Those frames are never
+  // resumed: rt_sigreturn of a trap frame always goes back to the dispatcher at the stack level the guest code ran at
+  // (RestoreFrame_*). So the frame is built at that level rather than below them, and when the guest has left the handler of
+  // an earlier trap without rt_sigreturn (its stack pointer is back above that handler's frame and at or above where that
+  // trap was taken, e.g. a handler that switches context like NtContinue), that frame's host stack is reused too. Without
+  // this every such trap leaks a few KiB of host stack, until the thread runs out of memory.
+  const int SigSysCode = Signal == SIGSYS ? static_cast<siginfo_t*>(info)->si_code : 0;
+  const bool IsTrapSignal = (SigSysCode == 1 /* SYS_SECCOMP */ || SigSysCode == 2 /* SYS_USER_DISPATCH */) && ThreadObject->SeccompTrapRIP &&
+                            !CTX->IsAddressInCodeBuffer(Thread, ArchHelpers::Context::GetPc(ucontext));
+  if (IsTrapSignal) {
+    const uint64_t GuestRSP = Thread->CurrentFrame->State.gregs[FEXCore::X86State::REG_RSP];
+    while (ThreadObject->TrapSignalFrameCount) {
+      const auto& Abandoned = ThreadObject->TrapSignalFrames[ThreadObject->TrapSignalFrameCount - 1];
+      if (GuestRSP <= Abandoned.GuestFrame || GuestRSP < Abandoned.GuestRSP) {
+        break;
+      }
+      ThreadObject->JITStackSP = Abandoned.JITStackSP;
+      --ThreadObject->TrapSignalFrameCount;
+      --Thread->CurrentFrame->SignalHandlerRefCounter;
+    }
+    const uint64_t Level = ThreadObject->JITStackSP ? ThreadObject->JITStackSP : Thread->CurrentFrame->ReturningStackLocation;
+    if (Level > ArchHelpers::Context::GetSp(ucontext)) {
+      ArchHelpers::Context::SetSp(ucontext, Level);
+    }
+  }
+
   auto ContextBackup = StoreThreadState(Thread, Signal, ucontext);
   // Remember the guest-visible mask of the interrupted code: rt_sigreturn puts it back (SignalMaskFix).
   ContextBackup->GuestSignalMask = ThreadObject->SignalInfo.CurrentSignalMask.Val;
@@ -337,7 +374,6 @@ bool SignalDelegator::HandleDispatcherGuestSignal(FEXCore::Core::InternalThreadS
   // between the filter deciding to trap and the SIGSYS being delivered must see the interrupted state (RIP at the
   // `syscall`), otherwise its handler returns past the syscall and the trap is skipped without its SIGSYS ever
   // reaching the guest.
-  const int SigSysCode = Signal == SIGSYS ? static_cast<siginfo_t*>(info)->si_code : 0;
   if (SigSysCode == 1 /* SYS_SECCOMP */ || SigSysCode == 2 /* SYS_USER_DISPATCH */) {
     ContextBackup->SeccompTrapRIP = ThreadObject->SeccompTrapRIP;
     ThreadObject->SeccompTrapRIP = 0;
@@ -433,6 +469,14 @@ bool SignalDelegator::HandleDispatcherGuestSignal(FEXCore::Core::InternalThreadS
 
   if (Is64BitMode) {
     NewGuestSP = SetupFrame_x64(Thread, ContextBackup, Frame, Signal, HostSigInfo, ucontext, GuestAction, GuestStack, NewGuestSP, eflags);
+    if (IsTrapSignal && ThreadObject->TrapSignalFrameCount < ThreadObject->MaxTrapSignalFrames) {
+      ThreadObject->TrapSignalFrames[ThreadObject->TrapSignalFrameCount++] = {
+        .GuestFrame = NewGuestSP,
+        .GuestRSP = OldGuestSP,
+        .JITStackSP = ContextBackup->SavedJITStackSP,
+        .ContextBackup = reinterpret_cast<uint64_t>(ContextBackup),
+      };
+    }
   } else {
     const bool SigInfoFrame = (GuestAction->sa_flags & SA_SIGINFO) == SA_SIGINFO;
     if (SigInfoFrame) {
