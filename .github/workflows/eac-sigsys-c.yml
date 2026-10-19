@@ -19,19 +19,30 @@ jobs:
         mkdir -p r; sed 's/#define ITERS 200000/#define ITERS 2000000/' fex/eac-tests/sigsys-redirect/sigsys_redirect_test.c > r/big.c
         sed "s#\$HERE/sigsys_redirect_test.c#$PWD/r/big.c#" fex/eac-tests/sigsys-redirect/build.sh > r/bb.sh; HERE=x sh r/bb.sh clang r/big >/dev/null; ls -la r/big
         FEX_NEEDSSECCOMP=1 fex/build/Bin/FEX r/big > r/big.txt 2>&1 & P=$!
-        for k in $(seq 1 120); do sleep 1; grep -E "VmStk|VmRSS" /proc/$P/status 2>/dev/null | tr '\n' ' '; echo " t=$k $(grep -c '^[A-F]:' r/big.txt)"; kill -0 $P 2>/dev/null || break; done
+        for k in $(seq 1 40); do sleep 1; grep -E "VmStk|VmRSS" /proc/$P/status 2>/dev/null | tr '\n' ' '; echo " t=$k $(grep -c '^[A-F]:' r/big.txt)"; [ $k = 31 ] && cp /proc/$P/smaps r/smaps-31.txt; [ $k = 35 ] && cp /proc/$P/smaps r/smaps-35.txt; kill -0 $P 2>/dev/null || break; done
+        python3 - <<'PY'
+        import re
+        def rd(f):
+            d={};cur=None
+            for l in open(f):
+                if re.match(r'^[0-9a-f]+-[0-9a-f]+ ',l): cur=l.strip()
+                elif l.startswith('Rss:'): d[cur]=int(l.split()[1])
+            return d
+        a=rd('r/smaps-31.txt'); b=rd('r/smaps-35.txt')
+        for k in sorted(set(a)|set(b), key=lambda k: -(b.get(k,0)-a.get(k,0)))[:8]: print(b.get(k,0)-a.get(k,0), 'kB', k)
+        PY
         wait $P; echo "rc=$?"; grep -v "^  " r/big.txt
     - run: |
         mkdir -p r; sh fex/eac-tests/sigsys-redirect/build.sh clang r/t >/dev/null
         nproc; uname -r
         crash=0
-        for i in $(seq 1 10); do
+        for i in $(seq 1 0); do
           FEX_NEEDSSECCOMP=1 timeout 120 fex/build/Bin/FEX r/t > r/o.txt 2>&1; rc=$?
           if [ $rc -ne 0 ]; then crash=$((crash+1)); echo "=== run $i rc=$rc"; grep -v "^  " r/o.txt | tail -8; cp r/o.txt r/fail-$i.txt; fi
         done
         echo "failures: $crash/200"
         # parallel load, like the guest
-        for i in $(seq 1 8); do (FEX_NEEDSSECCOMP=1 timeout 120 fex/build/Bin/FEX r/t > r/p-$i.txt 2>&1; echo "rc=$?" >> r/p-$i.txt) & if [ $((i % 4)) = 0 ]; then wait; fi; done; wait
+        for i in $(seq 1 0); do (FEX_NEEDSSECCOMP=1 timeout 120 fex/build/Bin/FEX r/t > r/p-$i.txt 2>&1; echo "rc=$?" >> r/p-$i.txt) & if [ $((i % 4)) = 0 ]; then wait; fi; done; wait
         echo "parallel failures: $(grep -L 'rc=0' r/p-*.txt | wc -l)/100"; for f in $(grep -L 'rc=0' r/p-*.txt); do echo "== $f"; grep -v '^  ' $f | tail -6; done
     - uses: actions/upload-artifact@v4
       if: always()
