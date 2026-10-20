@@ -9,7 +9,7 @@ Tested titles: VRChat is verified in game (EAC `301`, online session); Mini Roya
 Results differ from game to game — each title ships its own EAC build and checks — so an untested game may or may not
 work.
 
-Releases are tags on this branch (`eac-2610.1`, `eac-2610.2`); fixes merged after the latest tag ship in the next one. The write-up — why each patch exists, how it was found,
+Releases are tags on this branch (`eac-2610.1`, `eac-2610.2`, `eac-2610.3`); fixes merged after the latest tag ship in the next one. The write-up — why each patch exists, how it was found,
 results and limits — is in the proof of concept,
 [StonkGuy/eac-arm64-emulation-poc](https://github.com/StonkGuy/eac-arm64-emulation-poc)
 ([docs/patches.md](https://github.com/StonkGuy/eac-arm64-emulation-poc/blob/master/docs/patches.md)). This is a
@@ -18,7 +18,8 @@ standalone fork; it is not affiliated with FEX-Emu.
 ## Commits
 
 One commit per patch, in order, on top of FEX-2610. The numbers are the PoC's patch numbers (0021 was withdrawn;
-0027–0032 are not part of this release).
+0027–0032, 0034 and 0040 are not part of this release). Since `eac-2610.2`, patches arrive through merged pull
+requests, so the table is in commit order (`git log --no-merges --reverse`), not in number order.
 
 | patch | commit | change |
 |---|---|---|
@@ -49,10 +50,25 @@ One commit per patch, in order, on top of FEX-2610. The numbers are the PoC's pa
 | 0026 | `2169934` | Signals: keep the signal alt stack while a thread exits on it |
 | 0033 | `e8f2a2f` | proc: list only the emulated process's mappings in /proc/<pid>/maps |
 | 0035 | `3044753` | SMC: code pages the guest makes writable stay writable for other processes (based on yungtry's patch 0028) |
-| 0036 | `c37db6e` | Seccomp: never execute a trapped syscall, and force its SIGSYS like Linux |
-| 0037 | `da5a255` | SMC: write-protect a code page before publishing it as translated |
+| 0036 | `c50a746` | Seccomp: never execute a trapped syscall, and force its SIGSYS like Linux |
+| 0037 | `2c461f5` | SMC: write-protect a code page before publishing it as translated |
+| 0041 | `3a9ca6b` | Signals: put back the interrupted InSyscallInfo on every rt_sigreturn |
+| 0042 | `3270470` | Syscalls: return EFAULT for bad user pointers in FEX's own handlers |
+| 0043 | `807bcc3` | SignalTrace: unlink the /dev/shm ring on exit_group |
+| 0044 | `dcbe8d3` | proc: check every I/O step of the synthesized /proc/<pid>/maps |
+| 0045 | `bc61502` | LinuxSyscalls: make translated-code pages writable before a kernel write (#5874) |
+| 0046 | `adff8d3` | LinuxSyscalls: x86-64 munmap may cross 4 GiB (#5847) |
+| 0047 | `a7b2205` | Ptrace: hide FEX's own SIGBUS alignment stops from the tracer |
+| 0038 | `2c1ecff` | Syscalls: keep seccomp inheritance off the FEX_EXECVEFD path in execve |
+| 0039 | `03ca63d` | Syscalls: keep argv[0] for an FD execveat through the FEX loader |
+| 0048 | `6127167` | Seccomp: emulate Syscall User Dispatch |
+| 0049 | `ef8c90a` | Syscall User Dispatch: no designated initializer inside the syscall macro |
+| 0050 | `a9cd632` | FEXCore: keep the packed NZCV bytes out of reconstructed EFLAGS |
+| 0051 | `40074b0` | Seccomp: only the trap's own SIGSYS resumes past the trapped syscall |
+| 0052 | `41f1c23` | Seccomp: a Syscall User Dispatch SIGSYS also owns the trap's resume address |
+| 0053 | `06f9ae1` | Signals: reuse the host stack of abandoned seccomp/SUD trap frames |
 
-Two more commits add [eac-tests/](eac-tests/) and this file; they touch nothing FEX builds.
+The other commits add [eac-tests/](eac-tests/), its CI workflow and this file; they touch nothing FEX builds.
 
 ## Options
 
