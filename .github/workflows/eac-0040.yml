@@ -1,6 +1,8 @@
 name: held 0040 (InstCountCI regen + divbench)
 
 on:
+  push:
+    branches: [ ci/0040-instcount ]
   workflow_dispatch:
     inputs:
       base: { description: "base ref", default: "87c57f0a5" }
@@ -14,7 +16,7 @@ jobs:
     - uses: actions/checkout@v4
       with: { path: ci }
     - uses: actions/checkout@v4
-      with: { ref: "${{ matrix.which == 'base' && inputs.base || inputs.held }}", submodules: recursive, path: fex, fetch-depth: 0 }
+      with: { ref: "${{ matrix.which == 'base' && (inputs.base || '87c57f0a5') || (inputs.held || 'held/0040-div-de-rebase') }}", submodules: recursive, path: fex, fetch-depth: 0 }
     - name: Tools
       run: sudo apt-get update -qq && sudo apt-get install -y -qq clang lld ninja-build cmake python3 >/dev/null
     - name: Build
