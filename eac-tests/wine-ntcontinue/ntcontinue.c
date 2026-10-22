@@ -85,6 +85,90 @@ static DWORD stub_nr(const char *name, DWORD def)
     return def;
 }
 
+/* ---- Phases 3/4: the two-thread pattern seen in THE FINALS / ARC Raiders traces ----
+ * Thread A, per round: a few raw NtContinue, raw NtQueryInformationProcess(ProcessExecuteFlags 0x22),
+ * writes a payload, publishes `pub = round` (plain store), RtlWakeAddressAll(&pub), then waits for B's ack.
+ * Thread B waits for `pub` to change: phase 3 spins raw NtYieldExecution, phase 4 RtlWaitOnAddress.
+ * B checks the payload belonging to the round it saw (store ordering) and acks. A spin bound turns a
+ * lost/never-visible publish into a FAIL instead of a hang. */
+DWORD nr_qip = 0x19;
+LONG raw_qip(HANDLE h, ULONG cls, void *buf, ULONG len, ULONG *ret);
+__asm__(".globl raw_qip\nraw_qip:\n  mov %rcx, %r10\n  mov nr_qip(%rip), %eax\n  syscall\n  ret\n");
+
+#define ROUNDS 20000
+#define SPIN_LIMIT 20000000u
+static volatile LONG64 pub, ack, payload[8];
+static void (WINAPI *pRtlWakeAddressAll)(const void *);
+static LONG (WINAPI *pRtlWaitOnAddress)(const volatile void *, void *, SIZE_T, const LARGE_INTEGER *);
+static int mode;                 /* 3 = yield spin, 4 = WaitOnAddress */
+static volatile LONG fails_a, fails_b, done;
+static unsigned long long max_spin_b;
+static volatile LONG qip_status;
+
+static DWORD WINAPI thread_a(void *arg)
+{
+    static __declspec(align(16)) CONTEXT ctx;
+    LONG64 r; unsigned k, spins; ULONG flags, rl; LONG st; DWORD64 regs[4];
+    for (r = 1; r <= ROUNDS && !done; r++) {
+        for (k = 0; k < 4; k++) {
+            memset(&ctx, 0, sizeof(ctx)); RtlCaptureContext(&ctx);
+            ctx.ContextFlags = CONTEXT_FULL; ctx.Rip = (DWORD64)resume_stub;
+            ctx.Rsp = (DWORD64)(scratch + sizeof(scratch) - 0x48); ctx.EFlags = 0x202;
+            ctx.MxCsr = ctx.FltSave.MxCsr = 0x1f80; ctx.R12 = r;
+            run_one(&ctx);
+            if (got.r[4] != (DWORD64)r && fails_a++ < 5) printf("  A round %lld: r12 after NtContinue %llx\n", r, got.r[4]);
+        }
+        st = raw_qip((HANDLE)-1, 0x22, &flags, sizeof(flags), &rl);
+        qip_status = st;   /* reported, not judged: the status only has to match native */
+        for (k = 0; k < 8; k++) payload[k] = r * 8 + k;
+        pub = r;
+        pRtlWakeAddressAll((const void *)&pub);
+        for (spins = 0; ack != r; spins++) {
+            if (spins > SPIN_LIMIT) { if (fails_a++ < 5) printf("  A round %lld: no ack (B saw %lld)\n", r, ack); done = 1; return 0; }
+            raw_yield(regs);
+        }
+    }
+    done = 1;
+    return 0;
+}
+
+static DWORD WINAPI thread_b(void *arg)
+{
+    LONG64 seen = 0, cur; unsigned k; unsigned long long spins;
+    LARGE_INTEGER to; DWORD64 regs[4];
+    to.QuadPart = -10000000;   /* 1 s */
+    while (seen < ROUNDS && !done) {
+        for (spins = 0; (cur = pub) == seen; spins++) {
+            if (done) return 0;
+            if (spins > SPIN_LIMIT) { if (fails_b++ < 5) printf("  B: publish of round %lld never seen\n", seen + 1); done = 1; return 0; }
+            if (mode == 3) raw_yield(regs);
+            else if (pRtlWaitOnAddress((const volatile void *)&pub, &seen, 8, &to) == 0x102 && fails_b++ < 5)
+                printf("  B: RtlWaitOnAddress timed out at round %lld (pub %lld)\n", seen + 1, pub);
+        }
+        if (spins > max_spin_b) max_spin_b = spins;
+        for (k = 0; k < 8; k++)
+            if (payload[k] != cur * 8 + k && fails_b++ < 5) printf("  B round %lld: payload[%u] %lld (stale)\n", cur, k, payload[k]);
+        seen = cur;
+        ack = cur;
+    }
+    return 0;
+}
+
+static int run_pair(int m)
+{
+    HANDLE h[2]; DWORD t0 = GetTickCount();
+    mode = m; pub = ack = 0; done = 0; fails_a = fails_b = 0; max_spin_b = 0;
+    h[1] = CreateThread(NULL, 0, thread_b, NULL, 0, NULL);
+    h[0] = CreateThread(NULL, 0, thread_a, NULL, 0, NULL);
+    WaitForMultipleObjects(2, h, TRUE, INFINITE);
+    CloseHandle(h[0]); CloseHandle(h[1]);
+    printf("%s: %d: %d rounds A=NtContinue+NtQIP(0x22)+RtlWakeAddressAll, B=%s; last %lld, max B waits %llu, NtQIP status %lx, %lu ms\n",
+           (fails_a || fails_b || ack != ROUNDS) ? "FAIL" : "PASS", m, ROUNDS,
+           m == 3 ? "raw NtYieldExecution spin" : "RtlWaitOnAddress", ack, max_spin_b, qip_status, GetTickCount() - t0);
+    fflush(stdout);
+    return fails_a || fails_b || ack != ROUNDS;
+}
+
 int main(int argc, char **argv)
 {
     HANDLE t; unsigned i; DWORD64 r[4]; LONG st; int f0;
@@ -101,5 +185,13 @@ int main(int argc, char **argv)
         CHECK(r[0] == 0x1212121212121212ull && r[3] == 0x1515151515151515ull, "yield %u r12/r15 clobbered\n", i);
     }
     printf("%s: 2: %d raw NtYieldExecution(0x46): status ok, r12-r15 preserved\n", fails > f0 ? "FAIL" : "PASS", ITERS); fflush(stdout);
+    {
+        HMODULE nt = GetModuleHandleA("ntdll.dll");
+        nr_qip = stub_nr("NtQueryInformationProcess", 0x19);
+        pRtlWakeAddressAll = (void *)GetProcAddress(nt, "RtlWakeAddressAll");
+        pRtlWaitOnAddress = (void *)GetProcAddress(nt, "RtlWaitOnAddress");
+        fails += run_pair(3);
+        fails += run_pair(4);
+    }
     return fails ? 1 : 0;
 }
