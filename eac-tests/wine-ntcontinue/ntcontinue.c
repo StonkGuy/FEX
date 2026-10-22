@@ -6,8 +6,10 @@
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
-#define ITERS 100000
+static unsigned ITERS = 100000;
+DWORD nr_continue = 0x43, nr_yield = 0x46;
 
 typedef struct { DWORD64 r[8]; DWORD64 rflags; DWORD mxcsr; DWORD pad; M128A xmm[10]; } dump_t;
 dump_t got;
@@ -23,7 +25,7 @@ __asm__(
 "  movdqu %xmm10,0x40(%rsp)\n movdqu %xmm11,0x50(%rsp)\n movdqu %xmm12,0x60(%rsp)\n movdqu %xmm13,0x70(%rsp)\n"
 "  movdqu %xmm14,0x80(%rsp)\n movdqu %xmm15,0x90(%rsp)\n"
 "  mov %rsp, saved_rsp(%rip)\n"
-"  mov %rcx, %r10\n xor %edx, %edx\n mov $0x43, %eax\n syscall\n"
+"  mov %rcx, %r10\n xor %edx, %edx\n mov nr_continue(%rip), %eax\n syscall\n"
 "  ud2\n"
 ".globl resume_stub\nresume_stub:\n"
 "  pushfq\n pop got+0x40(%rip)\n cld\n"
@@ -44,7 +46,7 @@ __asm__(
 ".globl raw_yield\nraw_yield:\n"
 "  push %r12\n push %r13\n push %r14\n push %r15\n"
 "  mov $0x1212121212121212,%r12\n mov $0x1313131313131313,%r13\n mov $0x1414141414141414,%r14\n mov $0x1515151515151515,%r15\n"
-"  push %rcx\n sub $8,%rsp\n mov $0x46, %eax\n syscall\n add $8,%rsp\n pop %r9\n"
+"  push %rcx\n sub $8,%rsp\n mov nr_yield(%rip), %eax\n syscall\n add $8,%rsp\n pop %r9\n"
 "  mov %r12,0x00(%r9)\n mov %r13,0x08(%r9)\n mov %r14,0x10(%r9)\n mov %r15,0x18(%r9)\n"
 "  pop %r15\n pop %r14\n pop %r13\n pop %r12\n ret\n");
 
@@ -75,18 +77,29 @@ static DWORD WINAPI phase1(void *arg)
     return 0;
 }
 
-int main(void)
+/* Take the syscall number from the ntdll stub (mov r10,rcx; mov eax,imm32) so the test follows Wine's table. */
+static DWORD stub_nr(const char *name, DWORD def)
+{
+    const unsigned char *p = (const void *)GetProcAddress(GetModuleHandleA("ntdll.dll"), name);
+    if (p && p[0] == 0x4c && p[1] == 0x8b && p[2] == 0xd1 && p[3] == 0xb8) return *(const DWORD *)(p + 4);
+    return def;
+}
+
+int main(int argc, char **argv)
 {
     HANDLE t; unsigned i; DWORD64 r[4]; LONG st; int f0;
+    if (argc > 1) ITERS = strtoul(argv[1], NULL, 0);
+    nr_continue = stub_nr("NtContinue", 0x43); nr_yield = stub_nr("NtYieldExecution", 0x46);
+    printf("syscall numbers: NtContinue %#lx NtYieldExecution %#lx, iters %u\n", nr_continue, nr_yield, ITERS);
     t = CreateThread(NULL, 0, phase1, NULL, 0, NULL);
     WaitForSingleObject(t, INFINITE);
-    printf("%s: 1: %d raw NtContinue(0x43) to a crafted CONTEXT: r8-r15, DF/AC/TF, MXCSR, XMM6-15 exact\n", fails ? "FAIL" : "PASS", ITERS);
+    printf("%s: 1: %d raw NtContinue(0x43) to a crafted CONTEXT: r8-r15, DF/AC/TF, MXCSR, XMM6-15 exact\n", fails ? "FAIL" : "PASS", ITERS); fflush(stdout);
     f0 = fails;
     for (i = 0; i < ITERS; i++) {
         st = raw_yield(r);
         CHECK(st == 0 || st == 0x40000024 /* STATUS_NO_YIELD_PERFORMED */, "yield %u status %lx\n", i, st);
         CHECK(r[0] == 0x1212121212121212ull && r[3] == 0x1515151515151515ull, "yield %u r12/r15 clobbered\n", i);
     }
-    printf("%s: 2: %d raw NtYieldExecution(0x46): status ok, r12-r15 preserved\n", fails > f0 ? "FAIL" : "PASS", ITERS);
+    printf("%s: 2: %d raw NtYieldExecution(0x46): status ok, r12-r15 preserved\n", fails > f0 ? "FAIL" : "PASS", ITERS); fflush(stdout);
     return fails ? 1 : 0;
 }
