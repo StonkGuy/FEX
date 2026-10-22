@@ -1,0 +1,1 @@
+- `wine-ntcontinue/`: Windows x64 PE (`build.sh`, mingw) doing 100k raw `syscall` NtContinue (0x43) to a crafted CONTEXT and 100k raw NtYieldExecution (0x46); run `wine ntcontinue.exe` natively and under FEX, all lines must PASS.
