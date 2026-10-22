@@ -1,0 +1,82 @@
+name: wine-ntcontinue (Wine proton-exp-11.0, native x86-64 vs FEX)
+
+on:
+  push:
+    branches: [ ci/wine-ntcontinue ]
+  workflow_dispatch:
+
+env:
+  # Kron4ek build of Valve's proton experimental_11.0 Wine (same tree as Proton Experimental 11, seccomp syscall trap)
+  WINE_URL: https://github.com/Kron4ek/Wine-Builds/releases/download/proton-exp-11.0/wine-proton-exp-11.0-amd64-wow64.tar.xz
+  WINEDLLOVERRIDES: "mscoree,mshtml,winemenubuilder.exe="
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+    - uses: actions/checkout@v4
+    - run: |
+        sudo apt-get update -qq && sudo apt-get install -y -qq mingw-w64 >/dev/null
+        x86_64-w64-mingw32-gcc --version | head -1
+        mkdir -p out && sh eac-tests/wine-ntcontinue/build.sh && cp eac-tests/wine-ntcontinue/ntcontinue.exe out/
+        x86_64-w64-mingw32-objdump -d out/ntcontinue.exe | grep -B2 -A1 -w syscall | head -20
+    - uses: actions/upload-artifact@v4
+      with: { name: exe, path: out }
+
+  native:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+    - uses: actions/download-artifact@v4
+      with: { name: exe, path: out }
+    - run: |
+        sudo apt-get update -qq && sudo apt-get install -y -qq libfreetype6 libfontconfig1 libgnutls30t64 >/dev/null || true
+        curl -sL "$WINE_URL" | tar xJ; W=$(ls -d wine-proton-*/); echo "W=$PWD/$W" >> $GITHUB_ENV
+    - run: |
+        mkdir -p r; export WINEPREFIX=$PWD/pfx; grep -m1 'model name' /proc/cpuinfo; uname -r; $W/bin/wine --version
+        set +e
+        timeout 300 $W/bin/wineboot -i > r/wineboot.txt 2>&1
+        # WINEDEBUG: confirm the raw syscalls trap (seccomp SIGSYS) on a short run
+        WINEDEBUG=+seh,+syscall timeout 120 $W/bin/wine out/ntcontinue.exe 20 > r/trace.txt 2>&1; echo "rc=$?" >> r/trace.txt
+        grep -ciE 'sigsys|syscall' r/trace.txt; grep -iE 'sigsys|seccomp|syscall' r/trace.txt | head -20; grep -E 'PASS|FAIL|numbers' r/trace.txt
+        time timeout 600 $W/bin/wine out/ntcontinue.exe > r/native.txt 2>&1; echo "rc=$?" >> r/native.txt; cat r/native.txt
+        $W/bin/wineserver -k
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with: { name: native, path: r }
+
+  fex:
+    needs: build
+    runs-on: ubuntu-24.04-arm
+    strategy: { fail-fast: false, matrix: { ref: [ eac-2610 ] } }
+    steps:
+    - uses: actions/checkout@v4
+      with: { ref: "${{ matrix.ref }}", submodules: recursive, path: fex }
+    - uses: actions/download-artifact@v4
+      with: { name: exe, path: out }
+    - name: Tools + x86-64 rootfs
+      run: |
+        sudo apt-get update -qq && sudo apt-get install -y -qq clang lld ninja-build cmake python3 mmdebstrap >/dev/null
+        sudo mmdebstrap --arch=amd64 --variant=extract --include=libc6,libgcc-s1,libstdc++6,libfreetype6,libfontconfig1,libgnutls30t64 noble rootfs http://archive.ubuntu.com/ubuntu > /dev/null
+        sudo chown -R $USER rootfs; ls rootfs/lib/x86_64-linux-gnu/libc.so.6
+        curl -sL "$WINE_URL" | tar xJ; W=$(ls -d wine-proton-*/); echo "W=$PWD/$W" >> $GITHUB_ENV
+    - name: Build FEX
+      run: |
+        cd fex; git log --oneline -1
+        cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+          -DBUILD_TESTING=OFF -DBUILD_THUNKS=OFF -DBUILD_FEXCONFIG=OFF -DENABLE_LTO=OFF -DENABLE_ASSERTIONS=OFF \
+          -DCMAKE_CXX_SCAN_FOR_MODULES=OFF -DUSE_LINKER=lld >/dev/null
+        set +e; cmake --build build -j$(nproc) > ../build.log 2>&1; rc=$?; grep -E -A5 "error:|FAILED" ../build.log | head -60; tail -2 ../build.log; exit $rc
+    - name: Run wine under FEX
+      run: |
+        mkdir -p r; export WINEPREFIX=$PWD/pfx FEX_ROOTFS=$PWD/rootfs FEX_NEEDSSECCOMP=1; F=$PWD/fex/build/Bin/FEX; uname -r
+        set +e
+        $F $W/bin/wine --version
+        timeout 900 $F $W/bin/wineboot -i > r/wineboot.txt 2>&1; echo "wineboot rc=$?"; tail -5 r/wineboot.txt
+        WINEDEBUG=+seh,+syscall timeout 300 $F $W/bin/wine out/ntcontinue.exe 20 > r/trace.txt 2>&1; echo "rc=$?" >> r/trace.txt
+        grep -ciE 'sigsys|syscall' r/trace.txt; grep -iE 'sigsys|seccomp|syscall' r/trace.txt | head -20; grep -E 'PASS|FAIL|numbers|rc=' r/trace.txt
+        time timeout 1800 $F $W/bin/wine out/ntcontinue.exe > r/fex.txt 2>&1; echo "rc=$?" >> r/fex.txt; cat r/fex.txt
+        timeout 30 $F $W/bin/wineserver -k
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with: { name: "fex-${{ strategy.job-index }}", path: r }
