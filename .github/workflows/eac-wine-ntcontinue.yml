@@ -86,6 +86,7 @@ jobs:
           done
         done
         grep -E '^==|PASS|FAIL|rc=' r/variants.txt
+        ! grep -qE '^FAIL|^rc=[1-9]' r/fex.txt r/variants.txt
         timeout 30 $F $W/bin/wineserver -k
     - uses: actions/upload-artifact@v4
       if: always()
