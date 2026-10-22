@@ -1,0 +1,42 @@
+name: held 0040 (InstCountCI regen + divbench)
+
+on:
+  workflow_dispatch:
+    inputs:
+      base: { description: "base ref", default: "87c57f0a5" }
+      held: { description: "held ref", default: "held/0040-div-de-rebase" }
+
+jobs:
+  arm64:
+    runs-on: ubuntu-24.04-arm
+    strategy: { fail-fast: false, matrix: { which: [ base, held ] } }
+    steps:
+    - uses: actions/checkout@v4
+      with: { path: ci }
+    - uses: actions/checkout@v4
+      with: { ref: "${{ matrix.which == 'base' && inputs.base || inputs.held }}", submodules: recursive, path: fex, fetch-depth: 0 }
+    - name: Tools
+      run: sudo apt-get update -qq && sudo apt-get install -y -qq clang lld ninja-build cmake python3 >/dev/null
+    - name: Build
+      run: |
+        cd fex; git log --oneline -1
+        cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+          -DBUILD_TESTING=ON -DBUILD_THUNKS=OFF -DBUILD_FEXCONFIG=OFF -DENABLE_LTO=OFF -DENABLE_ASSERTIONS=True \
+          -DENABLE_VIXL_DISASSEMBLER=True -DENABLE_VIXL_SIMULATOR=False -DCMAKE_CXX_SCAN_FOR_MODULES=OFF -DUSE_LINKER=lld >/dev/null
+        set +e; cmake --build build -j$(nproc) --target FEX CodeSizeValidation instcountci_test_files > ../build.log 2>&1; rc=$?
+        grep -E -A5 "error:|FAILED" ../build.log | head -60; tail -2 ../build.log; exit $rc
+    - name: InstCountCI regenerate
+      run: |
+        cd fex; cmake --build build --target instcountci_tests > ../ic-tests.log 2>&1 || true
+        grep -E "tests passed|Failed|\*\*\*" ../ic-tests.log | tail -20
+        cmake --build build --target instcountci_update_tests > ../ic-update.log 2>&1 || true
+        mkdir -p ../r; git diff > ../r/instcountci.diff; git diff --stat | tail -20
+        git diff --name-only | tar -cf ../r/instcountci-json.tar -T - 2>/dev/null || true
+    - name: divbench
+      run: |
+        sudo apt-get install -y -qq gcc-x86-64-linux-gnu >/dev/null; x86_64-linux-gnu-gcc -O2 -static -o divbench ci/.github/bench/divbench.c
+        file divbench; lscpu | grep -m1 "Model name"
+        for k in 1 2 3 4 5; do fex/build/Bin/FEX ./divbench 50000000; done | tee r/divbench.txt
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with: { name: "r-${{ matrix.which }}", path: r }
