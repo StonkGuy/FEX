@@ -58,7 +58,7 @@ jobs:
       run: |
         sudo apt-get update -qq && sudo apt-get install -y -qq clang lld ninja-build cmake python3 mmdebstrap >/dev/null
         sudo mmdebstrap --arch=amd64 --variant=extract --include=libc6,libgcc-s1,libstdc++6,libfreetype6,libfontconfig1,libgnutls30t64 noble rootfs http://archive.ubuntu.com/ubuntu > /dev/null
-        sudo chown -R $USER rootfs; ls rootfs/lib/x86_64-linux-gnu/libc.so.6
+        sudo chown -R $USER rootfs; cd rootfs; for d in lib lib64 bin sbin; do [ -e $d ] || ln -s usr/$d $d; done; mkdir -p tmp proc sys dev etc; cd ..; ls -l rootfs/lib64/ rootfs/usr/lib/x86_64-linux-gnu/libc.so.6
         curl -sL "$WINE_URL" | tar xJ; W=$(ls -d wine-proton-*/); echo "W=$PWD/$W" >> $GITHUB_ENV
     - name: Build FEX
       run: |
