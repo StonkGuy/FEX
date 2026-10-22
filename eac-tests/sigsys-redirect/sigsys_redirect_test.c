@@ -22,6 +22,8 @@
 //   D  seccomp, nested: every 1000th trap the handler (SA_NODEFER) makes a trapped syscall of its own
 //   E  seccomp, four threads in the A loop at once
 //   F  Syscall User Dispatch (Wine 11), Wine-style redirect, selector byte toggled like Wine
+//   G  seccomp, the handler resumes a crafted context through the signal frame (NtContinue to a CONTEXT): r8-r12, r15,
+//      rbp, EFLAGS with DF and AC, MXCSR and XMM6 are checked where it lands (THE FINALS / ARC Raiders loop on NtContinue)
 // Expected: passes on a Linux x86-64 kernel (phase F needs CONFIG_GENERIC_ENTRY, i.e. any x86-64 kernel >= 5.11).
 // Build: eac-tests/sigsys-redirect/build.sh [clang] [output]
 // Run:   FEX_NEEDSSECCOMP=1 ./sigsys_redirect_test   (exit status = number of failed checks)
@@ -105,18 +107,24 @@ __asm__(".section .rodata\n.globl blob_start\nblob_start:\n"
         ".globl blob_syscall\nblob_syscall:\n  syscall\n  ud2\n"
         "1:\n  jmp *%r14\n"
         ".globl blob_nested\nblob_nested:\n  mov $0x1234, %eax\n.globl blob_nested_syscall\nblob_nested_syscall:\n  syscall\n  ret\n"
+        // Phase G: where the handler's crafted context resumes. Records what rt_sigreturn loaded, then re-enters the loop.
+        ".globl blob_check\nblob_check:\n  pushfq\n  popq 48(%rbx)\n  mov %r8, 56(%rbx)\n  mov %r9, 64(%rbx)\n"
+        "  mov %r10, 72(%rbx)\n  mov %r11, 80(%rbx)\n  mov %r12, 88(%rbx)\n  mov %r15, 96(%rbx)\n  mov %rbp, 104(%rbx)\n"
+        "  stmxcsr 112(%rbx)\n  movdqu %xmm6, 120(%rbx)\n  mov %rsp, 136(%rbx)\n"
+        "  pushq $0x202\n  popfq\n  movl $0x1f80, -8(%rsp)\n  ldmxcsr -8(%rsp)\n  jmp blob_start\n"
         ".globl blob_end\nblob_end:\n.text\n");
-extern const unsigned char blob_start[], blob_syscall[], blob_nested[], blob_nested_syscall[], blob_end[];
+extern const unsigned char blob_start[], blob_syscall[], blob_nested[], blob_nested_syscall[], blob_check[], blob_end[];
 #define TP(sym) (TRAP_PAGE + (u64)((sym) - blob_start))
 
 // Per-thread state; the context NtContinue switches to is its first member (the trapped code passes it in rdi).
 struct ctx { u64 rip, rsp, efl, rbx, r13, r14; };
 struct ts {
   struct ctx c;                      // offset 0: read by switch_to
+  u64 got[12];                       // offset 48: written by blob_check (phase G)
   u64 counter;
   u64 frame[4];                      // Wine's syscall_frame: rip, rcx, eflags, restore_flags
   u64 traps, bad, first_bad, uc_min, uc_max, nested_ok, nested_bad;
-  u64 snap[24];                      // first trap: siginfo + ucontext
+  u64 snap[24];   // [0..12] first trap, [13..23] phase G first resume                      // first trap: siginfo + ucontext
   unsigned char* selector;           // SUD selector byte (phase F)
   unsigned char stack[65536] __attribute__((aligned(16)));
 };
@@ -188,6 +196,27 @@ __attribute__((used)) static void handler(int sig, void* info, void* uc) {
     u64 m = 1UL << (SIGSYS - 1);
     sc4(SYS_rt_sigprocmask, 1 /* SIG_UNBLOCK */, &m, 0, 8);
     switch_to(&t->c);
+  }
+  if (g_mode == 'G') {
+    // NtContinue to a full CONTEXT, done the way a handler hands one to the kernel: rewrite the ucontext and return.
+    // blob_check records what rt_sigreturn loaded; it is compared here on the next trap.
+    if (t->traps > 1) {
+      const u64* g = t->got;
+      if ((g[0] & 0x40fd5) != 0x40ed5) bad(t, 0x2000);           // DF, AC, IF, arithmetic flags
+      if (g[1] != 0x8888 || g[2] != 0x9999 || g[3] != 0xaaaa || g[4] != 0xbbbb || g[5] != 0xcccc || g[6] != 0xffff ||
+          g[7] != 0xbebe) bad(t, 0x4000);
+      if ((u32)g[8] != 0x9fc0) bad(t, 0x8000);                   // MXCSR: FTZ, DAZ, all masked
+      if (g[9] != 0x0123456789abcdefUL || g[10] != 0xfedcba9876543210UL) bad(t, 0x10000);   // XMM6
+      if (g[11] != t->c.rsp) bad(t, 0x20000);
+      if (t->traps == 2) for (int i = 0; i < 11; ++i) t->snap[13 + i] = g[i];
+    }
+    GREG(uc, R8) = 0x8888; GREG(uc, R9) = 0x9999; GREG(uc, R10) = 0xaaaa; GREG(uc, R11) = 0xbbbb; GREG(uc, R12) = 0xcccc;
+    GREG(uc, R15) = 0xffff; GREG(uc, RBP) = 0xbebe; GREG(uc, EFL) = 0x40ed7; GREG(uc, RSP) = t->c.rsp;
+    GREG(uc, RIP) = TP(blob_check);
+    unsigned char* fp = *(unsigned char**)((char*)uc + 40 + 23 * 8);   // uc_mcontext.fpregs (FXSAVE layout)
+    *(u32*)(fp + 24) = 0x9fc0;
+    *(u64*)(fp + 160 + 6 * 16) = 0x0123456789abcdefUL; *(u64*)(fp + 160 + 6 * 16 + 8) = 0xfedcba9876543210UL;
+    return;
   }
   // Wine's redirect (sigsys_handler).
   t->frame[0] = GREG(uc, RIP) + 0xb;
@@ -338,6 +367,10 @@ __attribute__((used)) void entry_c(void) {
   out("  nested_ok="); outhex(T[0].nested_ok); out(" nested_bad="); outhex(T[0].nested_bad); out("\n");
   check(phase_ok(&T[0]) && T[0].nested_ok == ITERS / 1000 && !T[0].nested_bad,
         "D: a trapped syscall inside the SIGSYS handler (SA_NODEFER) returns its value, outer loop unaffected");
+
+  g_mode = 'G'; set_handler(0); prep(&T[0], (u64)main_exit); run_loop(&T[0].c); report(&T[0], "G", 0);
+  for (int i = 0; i < 11; ++i) kv("G.got", T[0].snap[13 + i]);
+  check(phase_ok(&T[0]), "G: 200000 NtContinue to a crafted context via the signal frame: GPRs, DF/AC, MXCSR, XMM6 exact");
 
   {
     g_mode = 'E'; set_handler(0); threads_done = 0;
