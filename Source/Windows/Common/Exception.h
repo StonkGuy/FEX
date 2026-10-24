@@ -25,6 +25,14 @@ static inline EXCEPTION_RECORD HandleGuestException(FEXCore::Core::CpuStateFrame
 
   switch (Fault.Signal) {
   case FEXCore::Core::FAULT_SIGILL: Dst.ExceptionCode = EXCEPTION_ILLEGAL_INSTRUCTION; return Dst;
+  case FEXCore::Core::FAULT_SIGFPE:
+    if (Fault.TrapNo == FEXCore::X86State::X86_TRAPNO_DE) {
+      // Like Wine on Linux, report every #DE (zero divisor or quotient overflow) as an integer divide by zero.
+      Dst.ExceptionCode = EXCEPTION_INT_DIVIDE_BY_ZERO;
+      return Dst;
+    }
+    LogMan::Msg::EFmt("Unknown SIGFPE trap: {}", Fault.TrapNo);
+    break;
   case FEXCore::Core::FAULT_SIGTRAP:
     switch (Fault.TrapNo) {
     case FEXCore::X86State::X86_TRAPNO_DB: Dst.ExceptionCode = EXCEPTION_SINGLE_STEP; return Dst;
