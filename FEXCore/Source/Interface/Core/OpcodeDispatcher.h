@@ -211,6 +211,10 @@ public:
     FlushRegisterCache();
     return _Break(Reason);
   }
+  IRPair<IROp_BreakErrorCode> BreakErrorCode(Ref ErrorCode, BreakDefinition Reason) {
+    FlushRegisterCache();
+    return _BreakErrorCode(ErrorCode, Reason);
+  }
   IRPair<IROp_Thunk> Thunk(Ref ArgPtr, SHA256Sum ThunkNameHash) {
     FlushRegisterCache();
     return _Thunk(ArgPtr, ThunkNameHash);
@@ -410,6 +414,7 @@ public:
   void XCHGRAXOp(OpcodeArgs);
   void SAHFOp(OpcodeArgs);
   void LAHFOp(OpcodeArgs);
+  void MOVSegFSGS64(OpcodeArgs, Ref Selector, uint32_t IndexOffset, uint32_t BaseOffset);
   void MOVSegOp(OpcodeArgs, bool ToSeg);
   void FLAGControlOp(OpcodeArgs);
   void MOVOffsetOp(OpcodeArgs);
