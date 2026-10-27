@@ -10,7 +10,9 @@
 // Cases, each placed well inside an executable page, with redundant CS segment prefixes (2e) in front: NOP (90),
 // NOP r/m (0f 1f 00) and MOV RAX, imm64 (48 b8 + 8 bytes), each at 15 bytes (executes) and 16 bytes (#GP(0)), and NOP
 // at 21 bytes. The 16th byte is a prefix, the ModRM byte or part of the immediate: a decoder may stop at each in a
-// different way. Printed per case: signal, si_code, RIP relative to the instruction, trapno, error code, address.
+// different way. Last, NOP at 16 bytes whose 16th byte is on a PROT_NONE page: the CPU never fetches that byte for this
+// instruction, so it raises #GP(0) as well rather than a page fault.
+// Printed per case: signal, si_code, RIP relative to the instruction, trapno, error code, address.
 // The binary is x86-64 only. Run it under FEX, and run the same binary on a real x86-64 Linux kernel for the reference.
 // Build: eac-tests/insn-toolong/build.sh [clang]
 // Run:   ./insn_toolong_test   (exit status = number of failed checks)
@@ -67,18 +69,20 @@ static void outhex(u64 v) { char b[19]; int i = 18; b[i] = 0; do { int d = v & 1
 static void outdec(u64 v) { char b[21]; int i = 20; b[i] = 0; do { b[--i] = '0' + v % 10; v /= 10; } while (v); out(b + i); }
 static void outrel(u64 v, u64 base) { if (v >= base) { out("+"); outdec(v - base); } else { out("-"); outdec(base - v); } }
 
-static void one(u64 mem, const char* what, const unsigned char* insn, int insn_size, int prefixes) {
+// split: the instruction starts with its prefixes at the end of the first page, the rest is on a PROT_NONE page
+static void one(u64 mem, const char* what, const unsigned char* insn, int insn_size, int prefixes, int split) {
   sc3(SYS_mprotect, mem, 2 * PAGE, PROT_READ | PROT_WRITE | PROT_EXEC);
-  unsigned char* s = (unsigned char*)(mem + 0x100);
+  unsigned char* s = (unsigned char*)(split ? mem + PAGE - (u64)prefixes : mem + 0x100);
   for (int i = 0; i < prefixes; ++i) s[i] = 0x2e; // cs:, ignored in 64-bit mode
   for (int i = 0; i < insn_size; ++i) s[prefixes + i] = insn[i];
   s[prefixes + insn_size] = 0xc3; // ret
   const int size = prefixes + insn_size;
+  if (split) sc3(SYS_mprotect, mem + PAGE, PAGE, PROT_NONE);
   u64 start = (u64)s;
   u64 before = faults;
   run_at(start);
   int faulted = faults != before;
-  out("  "); out(what); out(", "); outdec((u64)size); out(" bytes: ");
+  out("  "); out(what); out(", "); outdec((u64)size); out(" bytes"); if (split) out(", 16th on a PROT_NONE page"); out(": ");
   if (faulted) {
     out("signal "); outdec(f_sig); out(" code "); outhex(f_code); out(" rip "); outrel(f_rip, start); out(" trapno ");
     outdec(f_trapno); out(" err "); outhex(f_err); out(" addr "); outhex(f_addr);
@@ -100,13 +104,14 @@ __attribute__((used)) void entry_c(void) {
   u64 mem = (u64)sc6(SYS_mmap, 0, 2 * PAGE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   if ((i64)mem < 0) { out("mmap failed\n"); sc1(SYS_exit_group, 99); }
   static const unsigned char nop[] = {0x90}, nop_rm[] = {0x0f, 0x1f, 0x00}, mov_imm64[] = {0x48, 0xb8, 1, 2, 3, 4, 5, 6, 7, 8};
-  one(mem, "nop", nop, sizeof(nop), 14);
-  one(mem, "nop", nop, sizeof(nop), 15);
-  one(mem, "nop", nop, sizeof(nop), 20);
-  one(mem, "nop r/m", nop_rm, sizeof(nop_rm), 12);
-  one(mem, "nop r/m", nop_rm, sizeof(nop_rm), 13);
-  one(mem, "mov rax, imm64", mov_imm64, sizeof(mov_imm64), 5);
-  one(mem, "mov rax, imm64", mov_imm64, sizeof(mov_imm64), 6);
+  one(mem, "nop", nop, sizeof(nop), 14, 0);
+  one(mem, "nop", nop, sizeof(nop), 15, 0);
+  one(mem, "nop", nop, sizeof(nop), 20, 0);
+  one(mem, "nop r/m", nop_rm, sizeof(nop_rm), 12, 0);
+  one(mem, "nop r/m", nop_rm, sizeof(nop_rm), 13, 0);
+  one(mem, "mov rax, imm64", mov_imm64, sizeof(mov_imm64), 5, 0);
+  one(mem, "mov rax, imm64", mov_imm64, sizeof(mov_imm64), 6, 0);
+  one(mem, "nop", nop, sizeof(nop), 15, 1);
   out(failures ? "RESULT: FAIL (" : "RESULT: PASS ("); outdec((u64)failures); out(" unexpected)\n");
   sc1(SYS_exit_group, failures);
 }
