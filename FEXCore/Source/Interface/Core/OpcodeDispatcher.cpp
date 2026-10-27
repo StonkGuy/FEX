@@ -138,6 +138,36 @@ void OpDispatchBuilder::IRETOp(OpcodeArgs) {
 
   const auto GPRSize = GetGPROpSize();
 
+  // IRET with RFLAGS.NT = 1 in IA-32e mode (64-bit and compatibility mode alike) raises #GP(0) before it pops anything
+  // (Intel SDM, IRET). User mode sets NT with POPF, and anti-tamper code checks for this fault to tell hardware from a
+  // translator. A real kernel delivers it as SIGSEGV with si_code SI_KERNEL and the IRET's RIP, like CPUIDOp's fault.
+  {
+    auto FaultBlock = CreateNewCodeBlockAfter(GetCurrentBlock());
+    auto ContinueBlock = CreateNewCodeBlockAfter(FaultBlock);
+
+    // NT == 0: the normal IRET. Non-zero: the #GP block.
+    auto CondJump_ = CondJump(GetRFLAG(FEXCore::X86State::RFLAG_NT_LOC), CondClass::EQ);
+    SetTrueJumpTarget(CondJump_, ContinueBlock);
+    SetFalseJumpTarget(CondJump_, FaultBlock);
+
+    SetCurrentCodeBlock(FaultBlock);
+    StartNewBlock();
+
+    // The #GP is a fault, so RIP points at the IRET itself, with its frame still on the stack.
+    _StoreContextGPR(GPRSize, GetRelocatedPC(Op, -Op->InstSize), offsetof(FEXCore::Core::CPUState, rip));
+
+    IR::BreakDefinition Reason {};
+    Reason.ErrorRegister = 0;
+    Reason.Signal = Core::FAULT_SIGSEGV;
+    Reason.TrapNumber = X86State::X86_TRAPNO_GP;
+    Reason.si_code = 0x80; // SI_KERNEL
+    BlockSetRIP = true;
+    Break(Reason);
+
+    SetCurrentCodeBlock(ContinueBlock);
+    StartNewBlock();
+  }
+
   Ref SP = _RMWHandle(LoadGPRRegister(X86State::REG_RSP));
 
   // RIP (64/32/16 bits)
