@@ -138,8 +138,10 @@ __attribute__((used)) void entry_c(void) {
     u64 before = segv_count;
     segv_frame_ok = 0;
     f = nt_iret_fault();
+    // NT after the handler is not checked: the handler clears it in the context, which Linux's rt_sigreturn ignores
+    // (check 5), so natively it is still set at the resume point (flags 0x4246)
     if (segv_count != before + 1 || segv_code != SI_KERNEL || segv_trapno != 13 || segv_err != 0 || !segv_frame_ok ||
-        !segv_nt || (f & NT)) {
+        !segv_nt) {
       if (!bad) {
         out("  iretq NT=1: repetition "); outdec(i); out(": faults "); outdec(segv_count - before); out(", si_code ");
         outhex(segv_code); out(", trapno "); outdec(segv_trapno); out(", err "); outhex(segv_err); out(", frame intact ");
