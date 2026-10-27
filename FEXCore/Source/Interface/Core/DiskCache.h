@@ -255,7 +255,8 @@ namespace DiskCache {
   // change that alters codegen; reset it to 1 on a rebase onto a new upstream version.
   // Revision 1: everything on eac-2610 up to here (POPF flags, IRET NT #GP, ...), which kept upstream's 30, so a
   // cache filled by one fork build was reused by the next.
-  static constexpr uint16_t FormatVersion = 0x8000 | (1 << 8) | 30;
+  // Revision 2: MOV to and from FS/GS in 64-bit mode.
+  static constexpr uint16_t FormatVersion = 0x8000 | (2 << 8) | 30;
 
   static constexpr uint32_t LOOKUP_KEY_MAX_BUCKET_DEPTH = 500;
 
