@@ -49,6 +49,7 @@ tf-iret             tf_iret_test                PASS -
 iret-nt             iret_nt_test                PASS -
 seg-load64          seg_load64_test             PASS -
 insn-straddle       insn_straddle_test          PASS -
+decode-race         decode_race_test            FAIL -
 syscall-efault      syscall_efault_test         PASS FEX_NEEDSSECCOMP=1
 sigreturn-syscallinfo sigreturn_syscallinfo_test PASS -
 sigsys-redirect     sigsys_redirect_test        PASS FEX_NEEDSSECCOMP=1
