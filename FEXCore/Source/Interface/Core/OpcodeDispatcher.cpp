@@ -1255,6 +1255,46 @@ void OpDispatchBuilder::FLAGControlOp(OpcodeArgs) {
 }
 
 
+// MOV to FS or GS in 64-bit mode: a data segment load against Linux's x86-64 GDT. A null selector (0-3), or one of the
+// four descriptors Linux gives user mode (index 4 32-bit user code, 5 user data, 6 64-bit user code, 15 CPU/node, all
+// DPL 3 with base 0), loads the selector and sets the base to 0 (a null selector clears it on Intel and on AMD since
+// Zen 2). Anything else raises #GP with the selector as its error code: there is no LDT unless the program creates one
+// (FEX does not support that in 64-bit mode), the other GDT entries are kernel, system or empty TLS descriptors, and
+// index 16 and up is past the GDT limit. The kernel delivers the #GP as SIGSEGV, si_code SI_KERNEL, trapno 13.
+// Anti-tamper code (THE FINALS', ARC Raiders') loads FS like this and tells hardware from a translator by the result.
+void OpDispatchBuilder::MOVSegFSGS64(OpcodeArgs, Ref Selector, uint32_t IndexOffset, uint32_t BaseOffset) {
+  // Loadable: TI (bit 2) clear, index (bits 3-15) below 16 with its bit set in 0x8071 (indices 0, 4, 5, 6, 15)
+  Ref Index = _Bfe(OpSize::i32Bit, 13, 3, Selector);
+  Ref TI = _Bfe(OpSize::i32Bit, 1, 2, Selector);
+  Ref Allowed = _And(OpSize::i32Bit, _Lshr(OpSize::i32Bit, Constant(0x8071), Index), Constant(1));
+  Allowed = _Select(OpSize::i32Bit, OpSize::i32Bit, CondClass::ULT, Index, Constant(16), Allowed, Constant(0));
+  Allowed = _Select(OpSize::i32Bit, OpSize::i32Bit, CondClass::EQ, TI, Constant(0), Allowed, Constant(0));
+
+  auto FaultBlock = CreateNewCodeBlockAfter(GetCurrentBlock());
+  auto ContinueBlock = CreateNewCodeBlockAfter(FaultBlock);
+  auto CondJump_ = CondJump(Allowed, CondClass::NEQ);
+  SetTrueJumpTarget(CondJump_, ContinueBlock);
+  SetFalseJumpTarget(CondJump_, FaultBlock);
+
+  // IR values do not live across blocks: each block reads the selector again (the jump flushed the guest registers)
+  SetCurrentCodeBlock(FaultBlock);
+  StartNewBlock();
+  // A fault: RIP points at the MOV, the selector and base are unchanged
+  Ref FaultSelector = LoadSourceGPR_WithOpSize(Op, Op->Src[0], OpSize::i16Bit, Op->Flags);
+  _StoreContextGPR(GetGPROpSize(), GetRelocatedPC(Op, -Op->InstSize), offsetof(FEXCore::Core::CPUState, rip));
+  IR::BreakDefinition Reason {};
+  Reason.Signal = Core::FAULT_SIGSEGV;
+  Reason.TrapNumber = X86State::X86_TRAPNO_GP;
+  Reason.si_code = 0x80; // SI_KERNEL
+  BlockSetRIP = true;
+  BreakErrorCode(_And(OpSize::i32Bit, FaultSelector, Constant(0xfffc)), Reason);
+
+  SetCurrentCodeBlock(ContinueBlock);
+  StartNewBlock();
+  _StoreContextGPR(OpSize::i16Bit, LoadSourceGPR_WithOpSize(Op, Op->Src[0], OpSize::i16Bit, Op->Flags), IndexOffset);
+  _StoreContextGPR(OpSize::i64Bit, Constant(0), BaseOffset);
+}
+
 void OpDispatchBuilder::MOVSegOp(OpcodeArgs, bool ToSeg) {
   // In x86-64 mode the accesses to the segment registers end up being constant zero moves
   // Aside from FS/GS
@@ -1268,7 +1308,7 @@ void OpDispatchBuilder::MOVSegOp(OpcodeArgs, bool ToSeg) {
   // selected for the registers
   // This statement is actually untrue, the instructions will /actually/ load 16bits in to the selector portion of the register!
   // Tested on a Zen+ CPU, the selector is the portion that is modified!
-  // We don't currently support FS/GS selector modifying, so this needs to be asserted out
+  // In 64-bit mode loading FS or GS checks the selector against Linux's GDT (MOVSegFSGS64)
   // The loads here also load the selector, NOT the base
 
   if (ToSeg) {
@@ -1306,8 +1346,7 @@ void OpDispatchBuilder::MOVSegOp(OpcodeArgs, bool ToSeg) {
         _StoreContextGPR(OpSize::i16Bit, Src, offsetof(FEXCore::Core::CPUState, gs_idx));
         UpdatePrefixFromSegment(Src, FEXCore::X86Tables::DecodeFlags::FLAG_GS_PREFIX);
       } else {
-        LogMan::Msg::EFmt("We don't support modifying GS selector in 64bit mode!");
-        DecodeFailure = true;
+        MOVSegFSGS64(Op, Src, offsetof(FEXCore::Core::CPUState, gs_idx), offsetof(FEXCore::Core::CPUState, gs_cached));
       }
       break;
     case FEXCore::X86State::REG_RSP: // FS
@@ -1316,8 +1355,7 @@ void OpDispatchBuilder::MOVSegOp(OpcodeArgs, bool ToSeg) {
         _StoreContextGPR(OpSize::i16Bit, Src, offsetof(FEXCore::Core::CPUState, fs_idx));
         UpdatePrefixFromSegment(Src, FEXCore::X86Tables::DecodeFlags::FLAG_FS_PREFIX);
       } else {
-        LogMan::Msg::EFmt("We don't support modifying FS selector in 64bit mode!");
-        DecodeFailure = true;
+        MOVSegFSGS64(Op, Src, offsetof(FEXCore::Core::CPUState, fs_idx), offsetof(FEXCore::Core::CPUState, fs_cached));
       }
       break;
     default: UnimplementedOp(Op); return;
@@ -1344,19 +1382,12 @@ void OpDispatchBuilder::MOVSegOp(OpcodeArgs, bool ToSeg) {
       break;
     case FEXCore::X86State::REG_RBP: // GS
     case FEXCore::X86State::REG_R13: // GS
-      if (Is64BitMode) {
-        Segment = Constant(0);
-      } else {
-        Segment = _LoadContextGPR(OpSize::i16Bit, offsetof(FEXCore::Core::CPUState, gs_idx));
-      }
+      // in 64-bit mode too: the selector last loaded (0 until the program loads one, as on Linux)
+      Segment = _LoadContextGPR(OpSize::i16Bit, offsetof(FEXCore::Core::CPUState, gs_idx));
       break;
     case FEXCore::X86State::REG_RSP: // FS
     case FEXCore::X86State::REG_R12: // FS
-      if (Is64BitMode) {
-        Segment = Constant(0);
-      } else {
-        Segment = _LoadContextGPR(OpSize::i16Bit, offsetof(FEXCore::Core::CPUState, fs_idx));
-      }
+      Segment = _LoadContextGPR(OpSize::i16Bit, offsetof(FEXCore::Core::CPUState, fs_idx));
       break;
     default: UnimplementedOp(Op); return;
     }
