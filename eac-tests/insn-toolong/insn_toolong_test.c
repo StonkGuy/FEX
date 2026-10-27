@@ -13,6 +13,7 @@
 // different way. Last, NOP at 16 bytes whose 16th byte is on a PROT_NONE page: the CPU never fetches that byte for this
 // instruction, so it raises #GP(0) as well rather than a page fault.
 // Printed per case: signal, si_code, RIP relative to the instruction, trapno, error code, address.
+// Not checked: the address (0 on hardware; FEX reports RIP for every #GP, and Wine does not read it for a #GP).
 // The binary is x86-64 only. Run it under FEX, and run the same binary on a real x86-64 Linux kernel for the reference.
 // Build: eac-tests/insn-toolong/build.sh [clang]
 // Run:   ./insn_toolong_test   (exit status = number of failed checks)

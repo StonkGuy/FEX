@@ -28,6 +28,7 @@ public:
     INVALID_INST,
     NOEXEC_INST,
     PARTIAL_DECODE_INST,
+    TOO_LONG_INST,
     BAD_RELOCATION,
     UNIMPLEMENTED_INST,
     BREAKPOINT_0,
@@ -161,6 +162,7 @@ private:
   uint64_t ExecutableRangeEnd {};
   bool ExecutableRangeWritable {};
   bool HitNonExecutableRange {};
+  bool HitInstructionLengthLimit {};
   bool HitBadRelocation {};
   uint32_t HitBreakpoint {~0U};
 
