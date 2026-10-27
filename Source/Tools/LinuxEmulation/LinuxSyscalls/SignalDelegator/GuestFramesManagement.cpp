@@ -161,13 +161,23 @@ void SignalDelegator::RestoreFrame_x64(FEXCore::Core::InternalThreadState* Threa
   auto* guest_uctx = reinterpret_cast<FEXCore::x86_64::ucontext_t*>(Context->UContextLocation);
   [[maybe_unused]] auto* guest_siginfo = reinterpret_cast<siginfo_t*>(Context->SigInfoLocation);
 
-  // The frame's EFLAGS is authoritative on rt_sigreturn, even when the RIP is unchanged.
-  // Linux restores the flags the handler left in uc_mcontext (FIX_EFLAGS in
-  // arch/x86/include/asm/sighandling.h covers TF/DF/AC/RF): clearing TF there stops
-  // single-stepping, leaving it set keeps it going, one trap per instruction. Only
-  // restoring the interrupted flags when the RIP changed is what let a handler's TF
-  // clear be ignored.
-  CTX->SetFlagsFromCompactedEFLAGS(Thread, guest_uctx->uc_mcontext.gregs[FEXCore::x86_64::FEX_REG_EFL]);
+  // The frame's EFLAGS is authoritative on rt_sigreturn, even when the RIP is unchanged, for the flags
+  // Linux copies back: restore_sigcontext takes FIX_EFLAGS (arch/x86/include/asm/sighandling.h:
+  // AC OF DF TF SF ZF AF PF CF RF) from uc_mcontext. Clearing TF there stops single-stepping,
+  // leaving it set keeps it going, one trap per instruction. Only restoring the interrupted flags
+  // when the RIP changed is what let a handler's TF clear be ignored.
+  // The other flags (NT, ID, IF, IOPL) keep their value at the rt_sigreturn, whatever the handler
+  // wrote into the frame: Wine resumes a raw NtContinue with rt_sigreturn, so a CONTEXT's NT does
+  // not reach the thread on Linux, and software resuming contexts that way sees the same here.
+  constexpr uint32_t FixEFLAGS =
+    (1U << FEXCore::X86State::RFLAG_CF_RAW_LOC) | (1U << FEXCore::X86State::RFLAG_PF_RAW_LOC) |
+    (1U << FEXCore::X86State::RFLAG_AF_RAW_LOC) | (1U << FEXCore::X86State::RFLAG_ZF_RAW_LOC) |
+    (1U << FEXCore::X86State::RFLAG_SF_RAW_LOC) | (1U << FEXCore::X86State::RFLAG_TF_RAW_LOC) |
+    (1U << FEXCore::X86State::RFLAG_DF_RAW_LOC) | (1U << FEXCore::X86State::RFLAG_OF_RAW_LOC) |
+    (1U << FEXCore::X86State::RFLAG_RF_LOC) | (1U << FEXCore::X86State::RFLAG_AC_LOC);
+  const uint32_t CurrentEFLAGS = CTX->ReconstructCompactedEFLAGS(Thread, false, nullptr, 0);
+  const uint32_t FrameEFLAGS = guest_uctx->uc_mcontext.gregs[FEXCore::x86_64::FEX_REG_EFL];
+  CTX->SetFlagsFromCompactedEFLAGS(Thread, (FrameEFLAGS & FixEFLAGS) | (CurrentEFLAGS & ~FixEFLAGS));
 
   // If the guest modified the RIP then we need to take special precautions here
   if (Context->OriginalRIP != guest_uctx->uc_mcontext.gregs[FEXCore::x86_64::FEX_REG_RIP] || Context->FaultToTopAndGeneratedException) {

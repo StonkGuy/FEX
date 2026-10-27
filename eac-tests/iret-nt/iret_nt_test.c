@@ -14,9 +14,10 @@
 //   3. IRETQ with NT = 1 raises SIGSEGV (si_code SI_KERNEL, trapno 13, error code 0) at the IRETQ itself, with the
 //      five-word frame still on the stack and NT = 1 in the signal context (500 times, so translated code is reused);
 //   4. IRETQ with NT = 0 takes NT from the RFLAGS in its frame (NT 0 and 1, 500 times each);
-//   5. a signal (ud2 -> SIGILL) reports the live NT in the context. Printed, not checked: NT the handler writes to the
-//      context. Linux's rt_sigreturn does not apply it (NT is not one of the bits restore_sigcontext copies back, so
-//      the interrupted NT stays); FEX applies it. No consumer of that difference is known: a documented limit.
+//   5. a signal (ud2 -> SIGILL) reports the live NT in the context, and rt_sigreturn leaves NT as it was: NT the
+//      handler writes to the context is not applied (NT is not one of the bits restore_sigcontext copies back, so the
+//      interrupted NT stays). Wine resumes a raw NtContinue that way, so a CONTEXT's NT never reaches the thread on
+//      Linux (THE FINALS' anti-cheat resumes contexts with raw NtContinue).
 // The binary is x86-64 only. Run it under FEX, and run the same binary on a real x86-64 Linux kernel for the reference.
 // Build: eac-tests/iret-nt/build.sh [clang]
 // Run:   ./iret_nt_test   (exit status = number of failed checks)
@@ -171,9 +172,9 @@ __attribute__((used)) void entry_c(void) {
       u64 g = nt_ud2(in ? NT : 0);
       out("  ud2 NT "); outdec(in); out(", handler writes NT "); outdec(wr); out(": signals "); outdec(ill_count - before);
       out(", NT in context "); outdec(ill_nt); out(", NT after rt_sigreturn "); outdec((g & NT) != 0); out("\n");
-      if (ill_count != before + 1 || ill_nt != in) ++bad;
+      if (ill_count != before + 1 || ill_nt != in || ((g & NT) != 0) != in) ++bad;
     }
-  check(!bad, "5. a signal reports the live NT in the context");
+  check(!bad, "5. a signal reports the live NT in the context; rt_sigreturn does not apply the context's NT");
 
   out(failures ? "RESULT: FAIL\n" : "RESULT: PASS\n");
   sc1(SYS_exit_group, failures);
