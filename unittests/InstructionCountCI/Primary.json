@@ -10,7 +10,7 @@
       "FLAGM2",
       "MOPS"
     ],
-    "BinaryCacheVersion": 33054
+    "BinaryCacheVersion": 33310
   },
   "Instructions": {
     "add bl, cl": {
@@ -2229,45 +2229,47 @@
       ]
     },
     "mov ax, gs": {
-      "ExpectedInstructionCount": 1,
+      "ExpectedInstructionCount": 2,
       "Comment": "0x8c",
       "ExpectedArm64ASM": [
-        "and x4, x4, #0xffffffffffff0000"
+        "ldrh w20, [x28, #968]",
+        "bfxil x4, x20, #0, #16"
       ]
     },
     "mov eax, gs": {
       "ExpectedInstructionCount": 1,
       "Comment": "0x8c",
       "ExpectedArm64ASM": [
-        "mov w4, #0x0"
+        "ldrh w4, [x28, #968]"
       ]
     },
     "mov rax, gs": {
       "ExpectedInstructionCount": 1,
       "Comment": "0x8c",
       "ExpectedArm64ASM": [
-        "mov w4, #0x0"
+        "ldrh w4, [x28, #968]"
       ]
     },
     "mov ax, fs": {
-      "ExpectedInstructionCount": 1,
+      "ExpectedInstructionCount": 2,
       "Comment": "0x8c",
       "ExpectedArm64ASM": [
-        "and x4, x4, #0xffffffffffff0000"
+        "ldrh w20, [x28, #970]",
+        "bfxil x4, x20, #0, #16"
       ]
     },
     "mov eax, fs": {
       "ExpectedInstructionCount": 1,
       "Comment": "0x8c",
       "ExpectedArm64ASM": [
-        "mov w4, #0x0"
+        "ldrh w4, [x28, #970]"
       ]
     },
     "mov rax, fs": {
       "ExpectedInstructionCount": 1,
       "Comment": "0x8c",
       "ExpectedArm64ASM": [
-        "mov w4, #0x0"
+        "ldrh w4, [x28, #970]"
       ]
     },
     "lea ax, [rbx+rcx*1 + 0]": {

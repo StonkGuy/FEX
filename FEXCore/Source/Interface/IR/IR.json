@@ -324,6 +324,12 @@
       "Break BreakDefinition:$Reason": {
         "HasSideEffects": true
       },
+      "BreakErrorCode GPR:$ErrorCode, BreakDefinition:$Reason": {
+        "HasSideEffects": true,
+        "Desc": ["Break whose fault error code is the low 16 bits of $ErrorCode, known only at run time",
+                 "(a #GP with a selector as its error code); Reason.ErrorRegister is not used"
+                ]
+      },
       "CallbackReturn": {
         "HasSideEffects": true
       },
