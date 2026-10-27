@@ -4,6 +4,7 @@ set(FEXCORE_BASE_SRCS
   Interface/Config/Config.cpp
   Utils/Allocator.cpp
   Utils/FileLoading.cpp
+  Utils/FaultSafeRead.cpp
   Utils/FileUtils.cpp
   Utils/ForcedAssert.cpp
   Utils/LogManager.cpp

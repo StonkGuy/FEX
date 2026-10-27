@@ -19,6 +19,7 @@ $end_info$
 #include <FEXCore/Core/X86Enums.h>
 #include <FEXCore/HLE/SyscallHandler.h>
 #include <FEXCore/Utils/Allocator.h>
+#include <FEXCore/Utils/FaultSafeRead.h>
 #include <FEXCore/Utils/LogManager.h>
 #include <FEXCore/Utils/Profiler.h>
 #include <FEXCore/Utils/Telemetry.h>
@@ -158,8 +159,11 @@ uint8_t Decoder::ReadByte() {
 
 std::optional<uint8_t> Decoder::PeekByte(uint8_t Offset) {
   uint64_t ByteAddress = reinterpret_cast<uint64_t>(InstStream.InstStream + InstructionSize + Offset);
-  if (CheckRangeExecutable(ByteAddress, 1) == 1) {
-    return InstStream.AdjustedInstStream[InstructionSize + Offset];
+  uint8_t Byte;
+  // The range check is no guarantee: another guest thread can revoke the page before the read (see FaultSafeRead).
+  if (CheckRangeExecutable(ByteAddress, 1) == 1 &&
+      FEXCore::Utils::FaultSafeRead::Copy(&Byte, &InstStream.AdjustedInstStream[InstructionSize + Offset], 1)) {
+    return Byte;
   } else {
     return std::nullopt;
   }
@@ -185,9 +189,12 @@ std::pair<uint64_t, bool> Decoder::ReadData(uint8_t Size) {
     Res = 0;
   } else {
     ReadableSize = CheckRangeExecutable(Address, Size);
-    if (ReadableSize == Size) {
-      std::memcpy(&Res, &InstStream.AdjustedInstStream[InstructionSize], Size);
-    } else {
+    // The range check is no guarantee: another guest thread can revoke the page before the read (see FaultSafeRead).
+    // A read that faults counts as no byte of the field read.
+    if (ReadableSize == Size && !FEXCore::Utils::FaultSafeRead::Copy(&Res, &InstStream.AdjustedInstStream[InstructionSize], Size)) {
+      ReadableSize = 0;
+    }
+    if (ReadableSize != Size) {
       HitNonExecutableRange = true;
       // See PeekByte, this specific case may cause some executable memory to read as 0 but it doesn't matter as the entire instruction will be rolled back anyway.
       Res = 0;
