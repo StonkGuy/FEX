@@ -15,6 +15,10 @@
 // page boundary, trapno, error code; checked against the hardware behaviour above. Not checked: the error code's
 // present bit (hardware: 0 for a PROT_NONE page, 1 for a readable one; FEX reports 1 for both). Wine passes on only
 // the fetch and write bits, so no Windows program sees it: a documented limit.
+// Last, a race: a second thread switches a page between PROT_NONE and PROT_READ | PROT_EXEC while this one calls into
+// the middle of it. Every call either runs or faults at its target: si_addr = RIP = the target, never past the
+// instruction even when the page became executable while the fault was being delivered. Anti-tamper code decrypts its
+// code pages on their first execute fault, from several threads at once, and checks the address.
 // The binary is x86-64 only. Run it under FEX, and run the same binary on a real x86-64 Linux kernel for the reference.
 // Build: eac-tests/insn-straddle/build.sh [clang]
 // Run:   ./insn_straddle_test   (exit status = number of failed checks)
@@ -65,6 +69,16 @@ static void fault(int sig, void* info, void* uc) {
   g[REG_RSP] = rsp + 8;
 }
 
+// spawn_thread(stack_top, fn): a CLONE_THREAD thread that calls fn (which does not return)
+__asm__(".text\n.globl spawn_thread\nspawn_thread:\n"
+        "  mov %rsi, -8(%rdi)\n  lea -8(%rdi), %rsi\n"
+        "  mov $0x50f00, %edi\n" // CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | CLONE_THREAD | CLONE_SYSVSEM
+        "  xor %edx, %edx\n  xor %r10d, %r10d\n  xor %r8d, %r8d\n  mov $56, %eax\n  syscall\n"
+        "  test %rax, %rax\n  jnz 1f\n"
+        "  pop %rbx\n  call *%rbx\n"
+        "1: ret\n");
+void spawn_thread(void* stack_top, void (*fn)(void));
+
 static int failures;
 static void out(const char* s) { u64 n = 0; while (s[n]) ++n; sc3(SYS_write, 1, s, n); }
 static void outhex(u64 v) { char b[19]; int i = 18; b[i] = 0; do { int d = v & 15; b[--i] = d < 10 ? '0' + d : 'a' + d - 10; v >>= 4; } while (v); b[--i] = 'x'; b[--i] = '0'; out(b + i); }
@@ -102,6 +116,44 @@ static void one(u64 mem, int on_first, u64 second_prot, const char* what) {
   if (!ok) { out("    expected SIGSEGV SEGV_ACCERR, addr = boundary, rip = instruction start, trapno 14, err with user + fetch bits\n"); ++failures; }
 }
 
+static volatile u64 race_page;
+static void toggle(void) {
+  for (;;) {
+    // longer without execute permission than with it, so most calls fault
+    for (int i = 0; i < 4; ++i) sc3(SYS_mprotect, race_page, PAGE, PROT_NONE);
+    sc3(SYS_mprotect, race_page, PAGE, PROT_READ | PROT_EXEC);
+  }
+}
+
+static void race(void) {
+  u64 page = (u64)sc6(SYS_mmap, 0, 3 * PAGE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  u64 stack = (u64)sc6(SYS_mmap, 0, 16 * PAGE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if ((i64)page < 0 || (i64)stack < 0) { out("mmap failed\n"); sc1(SYS_exit_group, 99); }
+  // the page between two executable ones: a range end past the target is two pages away
+  unsigned char* p = (unsigned char*)page;
+  for (u64 i = 0; i < 3 * PAGE; ++i) p[i] = 0xc3; // ret
+  sc3(SYS_mprotect, page, 3 * PAGE, PROT_READ | PROT_EXEC);
+  race_page = page + PAGE;
+  const u64 target = race_page + 0x690;
+  spawn_thread((void*)(stack + 16 * PAGE), toggle);
+  u64 calls = 0, fault_count = 0, wrong = 0, first_addr = 0, first_rip = 0;
+  for (; calls < 2000000 && fault_count < 20000; ++calls) {
+    u64 before = faults;
+    run_at(target);
+    if (faults == before) continue;
+    ++fault_count;
+    if (f_sig != SIGSEGV || f_addr != target || f_rip != target || f_trapno != 14) {
+      if (!wrong) { first_addr = f_addr; first_rip = f_rip; }
+      ++wrong;
+    }
+  }
+  out("  race: "); outdec(calls); out(" calls, "); outdec(fault_count); out(" faults, "); outdec(wrong);
+  out(" not at the target");
+  if (wrong) { out(" (first: addr target"); outrel(first_addr, target); out(" rip target"); outrel(first_rip, target); out(")"); }
+  out("\n");
+  if (wrong || !fault_count) { out("    expected every fault SIGSEGV at the target, addr = rip = target, trapno 14\n"); ++failures; }
+}
+
 __attribute__((used)) void entry_c(void) {
   struct ksigaction sa = {(void*)fault, SA_SIGINFO | SA_RESTORER, (void*)restore_rt, 0};
   sc6(SYS_rt_sigaction, SIGSEGV, (i64)&sa, 0, 8, 0, 0);
@@ -116,6 +168,7 @@ __attribute__((used)) void entry_c(void) {
     for (int i = 0; i < 3; ++i) one(mem, splits[i], prot, n ? "second page PROT_READ" : "second page PROT_NONE");
     one(mem, 0, prot, n ? "second page PROT_READ" : "second page PROT_NONE");
   }
+  race();
   out(failures ? "RESULT: FAIL (" : "RESULT: PASS ("); outdec((u64)failures); out(" unexpected)\n");
   sc1(SYS_exit_group, failures);
 }
