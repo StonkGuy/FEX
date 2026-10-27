@@ -107,6 +107,44 @@ DEF_OP(Break) {
   }
 }
 
+DEF_OP(BreakErrorCode) {
+  auto Op = IROp->C<IR::IROp_BreakErrorCode>();
+
+  // The error code first: resetting the stack may use TMP1
+  uxth(ARMEmitter::Size::i64Bit, TMP2, GetReg(Op->ErrorCode));
+  ResetStack();
+
+  Core::CpuStateFrame::SynchronousFaultDataStruct State = {
+    .FaultToTopAndGeneratedException = 1,
+    .Signal = Op->Reason.Signal,
+    .TrapNo = Op->Reason.TrapNumber,
+    .si_code = Op->Reason.si_code,
+    .err_code = 0,
+    .FaultAddress = 0, // No fault address: si_addr stays the faulting RIP.
+  };
+  static_assert(offsetof(Core::CpuStateFrame::SynchronousFaultDataStruct, err_code) == 4, "err_code is bits 32-47");
+
+  uint64_t Constant {};
+  memcpy(&Constant, &State, sizeof(uint64_t));
+
+  LoadConstant(ARMEmitter::Size::i64Bit, TMP1, static_cast<uint64_t>(Constant));
+  bfi(ARMEmitter::Size::i64Bit, TMP1, TMP2, 32, 16);
+  // Can't use stp, offset is too large.
+  str(TMP1, STATE, offsetof(FEXCore::Core::CpuStateFrame, SynchronousFaultData));
+  str(ARMEmitter::XReg::zr, STATE, offsetof(FEXCore::Core::CpuStateFrame, SynchronousFaultData) + 8);
+
+  if (CTX->HostFeatures.ProcessFeatures.SupportsFaultFreeSynchronousFaults) {
+    ldr(TMP1, STATE, offsetof(FEXCore::Core::CpuStateFrame, Pointers.GuestSignal_SynchronousFault));
+  } else {
+    switch (Op->Reason.Signal) {
+    case Core::FAULT_SIGILL: ldr(TMP1, STATE, offsetof(FEXCore::Core::CpuStateFrame, Pointers.GuestSignal_SIGILL)); break;
+    case Core::FAULT_SIGSEGV: ldr(TMP1, STATE, offsetof(FEXCore::Core::CpuStateFrame, Pointers.GuestSignal_SIGSEGV)); break;
+    default: ldr(TMP1, STATE, offsetof(FEXCore::Core::CpuStateFrame, Pointers.GuestSignal_SIGTRAP)); break;
+    }
+  }
+  br(TMP1);
+}
+
 DEF_OP(GetRoundingMode) {
   auto Dst = GetReg(Node);
   mrs(Dst, ARMEmitter::SystemRegister::FPCR);
