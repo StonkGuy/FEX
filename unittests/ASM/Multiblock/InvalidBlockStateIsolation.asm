@@ -16,7 +16,7 @@ test eax, eax
 jz valid_block
 
 invalid_block:
-mov fs, ax
+a32 stosb
 
 valid_block:
 jmp success
