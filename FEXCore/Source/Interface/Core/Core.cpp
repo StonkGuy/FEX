@@ -31,6 +31,7 @@ $end_info$
 #include "Utils/Allocator.h"
 #include "Utils/Allocator/HostAllocator.h"
 #include "Utils/crc32.h"
+#include <FEXCore/Utils/FaultSafeRead.h>
 #include <FEXCore/Utils/SpinWaitLock.h>
 #include "Utils/variable_length_integer.h"
 
@@ -650,7 +651,10 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
           auto ExistingCodePtr = reinterpret_cast<uint8_t*>(Block.Entry + BlockInstructionsLength);
           auto InstAddressReg = Thread->OpDispatcher->_EntrypointOffset(GPRSize, InstAddress - GuestRIP);
 
-          auto Value = FEXCore::Utils::crc32(ExistingCodePtr, DecodedInfo->InstSize);
+          // Another guest thread can revoke the page after decoding: a CRC that never matches then re-translates.
+          uint8_t InstBytes[16];
+          const bool Readable = FEXCore::Utils::FaultSafeRead::Copy(InstBytes, ExistingCodePtr, DecodedInfo->InstSize);
+          auto Value = Readable ? FEXCore::Utils::crc32(InstBytes, DecodedInfo->InstSize) : ~0U;
           auto CRC = WantsDiskCachePatching ?
                        Thread->OpDispatcher->_PatchableGuestCRC(IR::OpSize::i64Bit, Value, (int64_t)ExistingCodePtr, DecodedInfo->InstSize) :
                        Thread->OpDispatcher->Constant(Value);
@@ -1008,10 +1012,14 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
       if (DebugData && DebugData->Relocations) {
         Relocations = *DebugData->Relocations;
       }
-      std::span<const uint8_t> GuestCode = {reinterpret_cast<const uint8_t*>(StartAddr), Length};
-      const Frontend::Decoder::DecodedBlockInformation* BlockInfo =
-        NeedsAddGuestCodeRanges ? Thread->FrontendDecoder->GetDecodedBlockInfo() : nullptr;
-      DiskCache.Store(Thread, Region, GuestRIP, *DiskCacheGuestCodeKey, GuestCode, CompiledCode, Relocations, BlockInfo);
+      // A copy of the guest code: another guest thread can revoke its pages meanwhile (see FaultSafeRead).
+      fextl::vector<uint8_t> GuestCodeCopy(Length);
+      if (FEXCore::Utils::FaultSafeRead::Copy(GuestCodeCopy.data(), reinterpret_cast<const void*>(StartAddr), Length)) {
+        std::span<const uint8_t> GuestCode = GuestCodeCopy;
+        const Frontend::Decoder::DecodedBlockInformation* BlockInfo =
+          NeedsAddGuestCodeRanges ? Thread->FrontendDecoder->GetDecodedBlockInfo() : nullptr;
+        DiskCache.Store(Thread, Region, GuestRIP, *DiskCacheGuestCodeKey, GuestCode, CompiledCode, Relocations, BlockInfo);
+      }
     }
 
     if (CodeMapWriter && Region && Region->FileStartVA != 0) {

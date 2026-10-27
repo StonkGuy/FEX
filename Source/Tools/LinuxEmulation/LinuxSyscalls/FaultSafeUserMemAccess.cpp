@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include "LinuxSyscalls/Syscalls.h"
 
+#include <FEXCore/Utils/FaultSafeRead.h>
+
 namespace FEX::HLE::FaultSafeUserMemAccess {
 #ifdef ARCHITECTURE_arm64
 __attribute__((naked)) size_t CopyFromUser(void* Dest, const void* Src, size_t Size) {
@@ -178,6 +180,8 @@ bool IsFaultLocation(uint64_t PC) {
   IsMemcpyFault |= reinterpret_cast<void*>(PC) == CopyToUser_FaultLocation;
   IsMemcpyFault |= reinterpret_cast<void*>(PC) == CopyFromUser_FaultLocation;
   IsMemcpyFault |= reinterpret_cast<void*>(PC) == StringReadable_FaultLocation;
+  // The frontend reading guest code that another guest thread revoked (FEXCore::Utils::FaultSafeRead).
+  IsMemcpyFault |= FEXCore::Utils::FaultSafeRead::IsFaultLocation(PC);
 #if defined(ASSERTIONS_ENABLED) && ASSERTIONS_ENABLED && defined(ARCHITECTURE_arm64)
   IsMemcpyFault |= reinterpret_cast<void*>(PC) == UserReadable_FaultLocation;
   IsMemcpyFault |= reinterpret_cast<void*>(PC) == UserWritable_FaultLocation;

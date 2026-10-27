@@ -60,7 +60,10 @@ eac-tests/<name>/build.sh native [output]    # where supported: built with the h
 | `sigreturn-eflags` | `rt_sigreturn` applies EFLAGS a handler wrote (DF; TF starts single-stepping with exactly one SIGTRAP). | 0016 |
 | `maps-probe` | Probes every inaccessible mapping listed in `/proc/self/maps` under a SIGSEGV handler: every probe returns, `si_addr` is the probed address. | 0023 |
 | `tf-iret` | Where the single-step trap lands after `POPFQ`, an `IRETQ` loading TF, Wine's `popfq; iretq`, and across cached call/ret code. | 0025 |
-| `iret-nt` | EFLAGS.NT: `POPFQ`/`PUSHFQ`, R11 after a syscall, `IRETQ` with NT = 1 raises #GP at the `IRETQ` with its frame intact, `IRETQ` with NT = 0 loads NT from its frame, a signal context reports the live NT (Limit: FEX's `rt_sigreturn` applies NT a handler writes to the context, Linux keeps the interrupted NT; no consumer known). Wine side (exception `CONTEXT`, raw invalid syscall, child processes): `wine-ntflag/` (Windows PE, run under Wine). | `iret-nt` branch |
+| `iret-nt` | EFLAGS.NT: `POPFQ`/`PUSHFQ`, R11 after a syscall, `IRETQ` with NT = 1 raises #GP at the `IRETQ` with its frame intact, `IRETQ` with NT = 0 loads NT from its frame, a signal context reports the live NT (Limit: FEX's `rt_sigreturn` applies NT a handler writes to the context, Linux keeps the interrupted NT; no consumer known). Wine side (exception `CONTEXT`, raw invalid syscall, child processes): `wine-ntflag/` (Windows PE, run under Wine). | #27 |
+| `seg-load64` | `MOV` to FS and GS in 64-bit mode with 31 selectors each: null selectors load and clear the base, the user descriptors load with base 0, every other selector raises #GP with the selector as the error code; reads return the loaded selector. | #29 |
+| `insn-straddle` | An instruction fetch fault at a page boundary: an instruction that starts on an executable page and ends on a PROT_NONE or PROT_READ page faults at the boundary with RIP at the instruction; a jump into the page faults at its target. | #30 |
+| `decode-race` | A page that code only branches to is switched between PROT_NONE and executable while another thread calls that code: no thread faults and the process never stalls (FEX's decoder reads ahead into such a page; a fault there used to reach the program and leave the code-invalidation lock held). | #34 |
 | `proc-maps` | `/proc/self/maps` lists only x86-64 process mappings: everything below `TASK_SIZE_MAX` except `[vsyscall]`, every file-backed ELF mapping x86-64. | 0033 |
 | `smc-remote-write` | A code page the guest made RWX (and executed from again) can be written by another process with `process_vm_writev` (Wine's `NtWriteVirtualMemory`), and the new code runs. | 0035 |
 | `smc-same-page` | Code that rewrites instructions on its own page (ahead of and behind the writer, in and outside the executing block, 1 to 16 bytes, with and without a jump or CPUID in between, across a page boundary, with the stack on the page) runs the new code every time and never hangs; then the same while a second thread keeps translating code from that page. Run also with `FEX_SMCHOTPAGEFAULTS=0`. | 0037 |
@@ -87,6 +90,8 @@ Expected results (same binaries on all three):
 | `execve-seccomp` | PASS | FAIL (the `#!` case) | PASS |
 | `restart-syscall` | PASS | SIGILL | PASS |
 | `maps-probe` | PASS | hang (timeout) | PASS |
+| `seg-load64`, `insn-straddle` | PASS | FAIL | PASS |
+| `decode-race` | PASS | not run | PASS (stalls in 2 of 3 runs on `eac-2610` before #34) |
 | `pop-fault` | PASS | FAIL | FAIL (withdrawn 0021) |
 
 Each test fails without the patch it names: the series was built one patch at a time and each test flips from FAIL to

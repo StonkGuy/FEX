@@ -11,6 +11,7 @@
 #include <FEXCore/fextl/memory.h>
 #include <FEXCore/fextl/string.h>
 #include <FEXCore/HLE/SyscallHandler.h>
+#include <FEXCore/Utils/FaultSafeRead.h>
 #include <FEXCore/Utils/File.h>
 #include <FEXCore/Utils/FileUtils.h>
 #include <FEXCore/Utils/LogManager.h>
@@ -21,6 +22,24 @@
 #include <cstdint>
 #include <cstring>
 #include <atomic>
+
+namespace {
+// Hashes guest memory that another guest thread can revoke meanwhile (see FaultSafeRead): false if it faulted.
+template<typename UpdateFn>
+bool HashGuestMemory(UpdateFn&& Update, uint64_t Address, uint64_t Size) {
+  uint8_t Buffer[256];
+  while (Size) {
+    const uint64_t Chunk = std::min<uint64_t>(Size, sizeof(Buffer));
+    if (!FEXCore::Utils::FaultSafeRead::Copy(Buffer, reinterpret_cast<const void*>(Address), Chunk)) {
+      return false;
+    }
+    Update(Buffer, Chunk);
+    Address += Chunk;
+    Size -= Chunk;
+  }
+  return true;
+}
+} // namespace
 
 namespace FEXCore {
 
@@ -569,12 +588,18 @@ namespace DiskCache {
         }
         uint64_t HashStart = SubBlock.Entry;
         // skip over masked in-block data and data/etc gaps between blocks
+        auto Update = [&](const uint8_t* Bytes, uint64_t Size) {
+          XXH3_64bits_update(&HashState, Bytes, Size);
+        };
         for (auto& DataMask : SubBlock.DataMasks) {
-          XXH3_64bits_update(&HashState, reinterpret_cast<const uint8_t*>(HashStart), DataMask.FieldAddress - HashStart);
+          if (!HashGuestMemory(Update, HashStart, DataMask.FieldAddress - HashStart)) {
+            return std::nullopt;
+          }
           HashStart = DataMask.FieldAddress + DataMask.ValueSize;
         }
-        if (HashStart != SubBlock.Entry + SubBlock.Size) {
-          XXH3_64bits_update(&HashState, reinterpret_cast<const uint8_t*>(HashStart), SubBlock.Size - (HashStart - SubBlock.Entry));
+        if (HashStart != SubBlock.Entry + SubBlock.Size &&
+            !HashGuestMemory(Update, HashStart, SubBlock.Size - (HashStart - SubBlock.Entry))) {
+          return std::nullopt;
         }
       }
       GuestCodeKey = XXH3_64bits_digest(&HashState);
@@ -697,8 +722,13 @@ namespace DiskCache {
         if (FirstHash || LastFootprintHashed != CurrentFootprint) {
           XXH3_state_t HashState;
           XXH3_128bits_reset(&HashState);
+          auto Update = [&](const uint8_t* Bytes, uint64_t Size) {
+            XXH3_128bits_update(&HashState, Bytes, Size);
+          };
           for (uint32_t i = 0; i < Entry.GuestExtents.size(); i += 2) {
-            XXH3_128bits_update(&HashState, reinterpret_cast<uint8_t*>(GuestRIP) + Entry.GuestExtents[i], Entry.GuestExtents[i + 1]);
+            if (!HashGuestMemory(Update, GuestRIP + Entry.GuestExtents[i], Entry.GuestExtents[i + 1])) {
+              return std::nullopt;
+            }
           }
           LiveGuestHash = XXH3_128bits_digest(&HashState);
           LastFootprintHashed = CurrentFootprint;
