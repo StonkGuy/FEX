@@ -565,6 +565,17 @@ uint64_t SignalDelegator::SetupFrame_x64(FEXCore::Core::InternalThreadState* Thr
     // Overwrite si_code and si_addr
     guest_siginfo->si_code = Thread->CurrentFrame->SynchronousFaultData.si_code;
     guest_siginfo->si_addr = reinterpret_cast<void*>(ContextBackup->OriginalRIP);
+    // An instruction fetch fault of an instruction that starts in executable memory runs into memory that is not
+    // (the decoder stopped part way): the CPU reports the first byte it could not fetch, where the executable range
+    // ends, with RIP still at the instruction. Wine passes si_addr on as the access violation's address, and
+    // anti-tamper code places instructions across a guard page to compare it.
+    if (Frame->SynchronousFaultData.TrapNo == FEXCore::X86State::X86_TRAPNO_PF &&
+        (Frame->SynchronousFaultData.err_code & FEXCore::X86State::X86_PF_INSTR)) {
+      const auto Range = FEX::HLE::_SyscallHandler->QueryGuestExecutableRange(Thread, ContextBackup->OriginalRIP);
+      if (Range.Size != 0) {
+        guest_siginfo->si_addr = reinterpret_cast<void*>(Range.Base + Range.Size);
+      }
+    }
     Signal = Frame->SynchronousFaultData.Signal;
   } else {
     guest_uctx->uc_mcontext.gregs[FEXCore::x86_64::FEX_REG_TRAPNO] = ConvertSignalToTrapNo(Signal, HostSigInfo);
