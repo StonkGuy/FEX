@@ -50,7 +50,7 @@ iret-nt             iret_nt_test                PASS -
 seg-load64          seg_load64_test             PASS -
 insn-straddle       insn_straddle_test          PASS -
 insn-toolong        insn_toolong_test           PASS -
-priv-gp             priv_gp_test                FAIL -
+priv-gp             priv_gp_test                PASS -
 syscall-efault      syscall_efault_test         PASS FEX_NEEDSSECCOMP=1
 sigreturn-syscallinfo sigreturn_syscallinfo_test PASS -
 sigsys-redirect     sigsys_redirect_test        PASS FEX_NEEDSSECCOMP=1
