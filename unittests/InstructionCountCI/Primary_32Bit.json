@@ -9,7 +9,7 @@
       "FlagM",
       "FlagM2"
     ],
-    "BinaryCacheVersion": 30
+    "BinaryCacheVersion": 33054
   },
   "Instructions": {
     "push es": {
@@ -55,7 +55,7 @@
       ]
     },
     "pop ss": {
-      "ExpectedInstructionCount": 22,
+      "ExpectedInstructionCount": 25,
       "Comment": "0x17",
       "ExpectedArm64ASM": [
         "ldr w20, [x8], #4",
@@ -63,10 +63,13 @@
         "mov w22, #0x1",
         "and w21, w21, #0x1",
         "ldrb w23, [x28, #1016]",
-        "and w23, w23, #0xfffffffe",
-        "mrs x12, nzcv",
+        "and w12, w23, #0xfffffffe",
+        "mov w13, #0x3",
+        "mrs x14, nzcv",
+        "cmp x23, #0x3 (3)",
+        "csel x22, x13, x22, eq",
         "cmp x21, #0x0 (0)",
-        "csel x21, x23, x22, eq",
+        "csel x21, x12, x22, eq",
         "strb w21, [x28, #1016]",
         "strh w20, [x28, #964]",
         "ubfx w21, w20, #2, #1",
@@ -79,7 +82,7 @@
         "orr w20, w22, w20, lsr #16",
         "bfi w20, w21, #16, #8",
         "str w20, [x28, #984]",
-        "msr nzcv, x12"
+        "msr nzcv, x14"
       ]
     },
     "push ds": {
