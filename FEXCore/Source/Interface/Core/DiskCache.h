@@ -249,7 +249,13 @@ namespace DiskCache {
   // The current version of the diskcache.
   // This must be changed any time codegen changes occur!
   // Be aware of the impact of changing this frequently!
-  static constexpr uint16_t FormatVersion = 30;
+  // StonkGuy/FEX eac-<release>: bit 15 set, the fork's codegen revision in bits 8-14, the upstream version the
+  // fork is based on in bits 0-7. Upstream never sets bit 15, so a cache written by the fork is never taken for
+  // one written by an upstream FEX with the same number, or the reverse. Increment the revision with every fork
+  // change that alters codegen; reset it to 1 on a rebase onto a new upstream version.
+  // Revision 1: everything on eac-2610 up to here (POPF flags, IRET NT #GP, ...), which kept upstream's 30, so a
+  // cache filled by one fork build was reused by the next.
+  static constexpr uint16_t FormatVersion = 0x8000 | (1 << 8) | 30;
 
   static constexpr uint32_t LOOKUP_KEY_MAX_BUCKET_DEPTH = 500;
 
