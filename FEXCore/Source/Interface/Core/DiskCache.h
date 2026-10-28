@@ -257,7 +257,8 @@ namespace DiskCache {
   // cache filled by one fork build was reused by the next.
   // Revision 2: MOV to and from FS/GS in 64-bit mode.
   // Revision 3: instructions longer than 15 bytes and XSETBV raise #GP(0).
-  static constexpr uint16_t FormatVersion = 0x8000 | (3 << 8) | 30;
+  // Revision 4: two-byte 0F B8/BC/BD decode with F2/F3/66 in any order (upstream 68f4c5fbc).
+  static constexpr uint16_t FormatVersion = 0x8000 | (4 << 8) | 30;
 
   static constexpr uint32_t LOOKUP_KEY_MAX_BUCKET_DEPTH = 500;
 
