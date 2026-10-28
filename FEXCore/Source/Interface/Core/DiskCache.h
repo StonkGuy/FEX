@@ -256,7 +256,8 @@ namespace DiskCache {
   // Revision 1: everything on eac-2610 up to here (POPF flags, IRET NT #GP, ...), which kept upstream's 30, so a
   // cache filled by one fork build was reused by the next.
   // Revision 2: MOV to and from FS/GS in 64-bit mode.
-  static constexpr uint16_t FormatVersion = 0x8000 | (2 << 8) | 30;
+  // Revision 3: instructions longer than 15 bytes and XSETBV raise #GP(0).
+  static constexpr uint16_t FormatVersion = 0x8000 | (3 << 8) | 30;
 
   static constexpr uint32_t LOOKUP_KEY_MAX_BUCKET_DEPTH = 500;
 
