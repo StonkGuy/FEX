@@ -122,8 +122,14 @@ bool Decoder::CheckRangeExecutable(uint64_t Address, uint64_t Size) {
 }
 
 uint8_t Decoder::ReadByte() {
+  if (InstructionSize >= MAX_INST_SIZE) {
+    // The CPU raises #GP(0) instead of fetching a 16th byte.
+    HitInstructionLengthLimit = true;
+    return 0;
+  }
+
   std::optional<uint8_t> Byte = PeekByte(0);
-  if (!Byte || InstructionSize == MAX_INST_SIZE) {
+  if (!Byte) {
     HitNonExecutableRange = true;
     // Pretend we read 0, the main decode loop will see HitNonExecutableRange and rollback the instruction.
     return 0;
@@ -153,8 +159,16 @@ std::pair<uint64_t, bool> Decoder::ReadData(uint8_t Size) {
   uint64_t Address = reinterpret_cast<uint64_t>(InstStream.InstStream + InstructionSize);
   LastFieldReadOffset = (uint8_t)InstructionSize;
   LastFieldReadSize = Size;
-  // The range check is no guarantee: another guest thread can revoke the page before the read (see FaultSafeRead).
-  if (!CheckRangeExecutable(Address, Size) || !FEXCore::Utils::FaultSafeRead::Copy(&Res, &InstStream.AdjustedInstStream[InstructionSize], Size)) {
+  if (InstructionSize + Size > MAX_INST_SIZE) [[unlikely]] {
+    // The field ends past the 15th byte: #GP(0), unless fetching the bytes up to the 15th faults first.
+    if (InstructionSize < MAX_INST_SIZE && !CheckRangeExecutable(Address, MAX_INST_SIZE - InstructionSize)) {
+      HitNonExecutableRange = true;
+    }
+    HitInstructionLengthLimit = true;
+    Res = 0;
+  } else if (!CheckRangeExecutable(Address, Size) ||
+             // The range check is no guarantee: another guest thread can revoke the page before the read (see FaultSafeRead).
+             !FEXCore::Utils::FaultSafeRead::Copy(&Res, &InstStream.AdjustedInstStream[InstructionSize], Size)) {
     HitNonExecutableRange = true;
     // See PeekByte, this specific case may cause some executable memory to read as 0 but it doesn't matter as the entire instruction will be rolled back anyway.
     Res = 0;
@@ -860,7 +874,7 @@ Decoder::DecodedBlockStatus Decoder::DecodeInstructionImpl(uint64_t PC) {
 
   for (;;) {
     if (InstructionSize >= MAX_INST_SIZE) {
-      return DecodedBlockStatus::INVALID_INST;
+      return DecodedBlockStatus::TOO_LONG_INST;
     }
     uint8_t Op = ReadByte();
     switch (Op) {
@@ -1086,10 +1100,11 @@ void Decoder::DecodeREXIfValid(int8_t ExpectedOffset) {
 Decoder::DecodedBlockStatus Decoder::DecodeInstruction(uint64_t PC) {
   // Will be set if DecodeInstructionImpl tries to read non-executable memory
   HitNonExecutableRange = false;
+  HitInstructionLengthLimit = false;
   HitBadRelocation = false;
   auto ErrorDuringDecoding = DecodeInstructionImpl(PC);
 
-  if (ErrorDuringDecoding != DecodedBlockStatus::SUCCESS || HitNonExecutableRange || HitBadRelocation) [[unlikely]] {
+  if (ErrorDuringDecoding != DecodedBlockStatus::SUCCESS || HitNonExecutableRange || HitInstructionLengthLimit || HitBadRelocation) [[unlikely]] {
     // Put an invalid instruction in the stream so the core can raise SIGILL if hit
     // Error while decoding instruction. We don't know the table or instruction size
     const auto InstSize = DecodeInst->InstSize;
@@ -1104,6 +1119,11 @@ Decoder::DecodedBlockStatus Decoder::DecodeInstruction(uint64_t PC) {
 
     if (HitBadRelocation) {
       return DecodedBlockStatus::BAD_RELOCATION;
+    }
+
+    // Likewise a decode error after reading zero for a byte past the 15th.
+    if (HitInstructionLengthLimit) {
+      return DecodedBlockStatus::TOO_LONG_INST;
     }
 
     return ErrorDuringDecoding;
@@ -1661,6 +1681,7 @@ void Decoder::DecodeLoop(const uint8_t* _InstStream, uint64_t GuestSizePause) {
           LogMan::Msg::EFmt("{} instruction in entry block: {:X}",
                             BlockIt->BlockStatus == DecodedBlockStatus::INVALID_INST       ? "Invalid" :
                             BlockIt->BlockStatus == DecodedBlockStatus::NOEXEC_INST        ? "NoExec" :
+                            BlockIt->BlockStatus == DecodedBlockStatus::TOO_LONG_INST      ? "TooLong" :
                             BlockIt->BlockStatus == DecodedBlockStatus::BAD_RELOCATION     ? "BadRelocation" :
                             BlockIt->BlockStatus == DecodedBlockStatus::UNIMPLEMENTED_INST ? "Unimplemented" :
                                                                                              "PartialDecode",

@@ -729,6 +729,9 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
               Thread->OpDispatcher->InvalidOp(DecodedInfo);
             } else if (Block.BlockStatus == Frontend::Decoder::DecodedBlockStatus::UNIMPLEMENTED_INST) {
               Thread->OpDispatcher->UnimplementedOp(DecodedInfo);
+            } else if (Block.BlockStatus == Frontend::Decoder::DecodedBlockStatus::TOO_LONG_INST) {
+              // Longer than 15 bytes: #GP(0), the same exception as a privileged instruction.
+              Thread->OpDispatcher->PermissionRestrictedOp(DecodedInfo);
             } else {
               Thread->OpDispatcher->NoExecOp(DecodedInfo);
             }
