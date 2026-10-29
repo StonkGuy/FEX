@@ -35,6 +35,8 @@ sigtrace-unlink     sigtrace_unlink_test        PASS -
 smc-remote-write    smc_remote_write_test       PASS -
 smc-same-page       smc_same_page_test          PASS -
 smc-same-page       smc_same_page_test          PASS FEX_SMCHOTPAGEFAULTS=0
+smc-restart-state   smc_restart_state_test      PASS -
+smc-restart-state   smc_restart_state_test      PASS FEX_SMCHOTPAGEFAULTS=0
 munmap-4g           munmap_4g_test              PASS -
 smc-kernel-write    smc_kernel_write_test       PASS -
 smc-hot-page        smc_hot_page_test           PASS -
