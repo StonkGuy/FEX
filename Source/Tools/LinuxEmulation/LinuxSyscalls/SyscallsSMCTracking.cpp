@@ -135,9 +135,16 @@ bool SyscallHandler::HandleSegfault(FEXCore::Core::InternalThreadState* Thread, 
 
     FEXCORE_PROFILE_INSTANT_INCREMENT(Thread, AccumulatedSMCCount, 1);
 
+    // The restart below re-runs the faulting instruction from the host state at the fault, which is in the middle of
+    // the instruction: its flags, RSP/RSI/RDI or the x87 top may already be updated. So it is only taken when the
+    // store can reach the executing block's code, not for data that merely shares a page with it (self-decrypting code
+    // keeps its keys and counters there). A single guest store writes at most 64 bytes around the faulting address.
+    constexpr uint64_t MaxStoreSize = 64;
+    const uint64_t StoreWindowStart = FaultAddress > MaxStoreSize ? FaultAddress - MaxStoreSize : 0;
+
     auto CTX = Thread->CTX;
     if (CTX->IsAddressInCodeBuffer(Thread, ArchHelpers::Context::GetPc(ucontext)) && !CTX->IsCurrentBlockSingleInst(Thread) &&
-        CTX->IsAddressInCurrentBlock(Thread, FaultAddress & FEXCore::Utils::FEX_PAGE_MASK, FEXCore::Utils::FEX_PAGE_SIZE)) {
+        CTX->IsAddressInCurrentBlock(Thread, StoreWindowStart, 2 * MaxStoreSize)) {
       // If we are not in a single-instruction block, and the SMC write address could intersect with the current block,
       // reconstruct the context and repeat the faulting instruction as a single-instruction block so any SMC it performs
       // is immediately picked up.
