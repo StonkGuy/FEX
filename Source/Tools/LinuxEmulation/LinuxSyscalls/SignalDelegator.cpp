@@ -367,9 +367,10 @@ bool SignalDelegator::HandleDispatcherGuestSignal(FEXCore::Core::InternalThreadS
 
   // A SECCOMP_RET_TRAP SIGSYS reports the instruction *after* the trapped syscall, so present the handler with that
   // address in its ucontext (Linux does the same). The frame's RIP, and therefore OriginalRIP, is still the `syscall`
-  // itself, so the ucontext RIP now differs from it: rt_sigreturn then takes the path that restores the handler's
-  // registers and resumes at the ucontext RIP, instead of the path that resets to the interrupted state and re-runs
-  // the syscall (discarding the handler's return value). See SeccompEmulator for the kernel semantics.
+  // itself. rt_sigreturn of a frame with SeccompTrapRIP set always takes the path that restores the handler's registers
+  // and resumes at the ucontext RIP (RestoreFrame_*), never the one that resets to the interrupted state, which would
+  // re-enter the abandoned syscall handler: also when the handler moves rip back onto the `syscall` to retry it (Wine's
+  // native-syscall path for EAC). See SeccompEmulator for the kernel semantics.
   // Only the trap's own SIGSYS (seccomp or Syscall User Dispatch) takes it: an asynchronous signal that arrives
   // between the filter deciding to trap and the SIGSYS being delivered must see the interrupted state (RIP at the
   // `syscall`), otherwise its handler returns past the syscall and the trap is skipped without its SIGSYS ever

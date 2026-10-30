@@ -169,8 +169,12 @@ void SignalDelegator::RestoreFrame_x64(FEXCore::Core::InternalThreadState* Threa
   // clear be ignored.
   CTX->SetFlagsFromCompactedEFLAGS(Thread, guest_uctx->uc_mcontext.gregs[FEXCore::x86_64::FEX_REG_EFL]);
 
-  // If the guest modified the RIP then we need to take special precautions here
-  if (Context->OriginalRIP != guest_uctx->uc_mcontext.gregs[FEXCore::x86_64::FEX_REG_RIP] || Context->FaultToTopAndGeneratedException) {
+  // If the guest modified the RIP then we need to take special precautions here. A seccomp or Syscall User Dispatch
+  // trap frame always does: the interrupted host context is the C++ half of the syscall handler that raised the trap,
+  // which is abandoned rather than resumed, and a handler that moves rip back onto the `syscall` to retry it (Wine's
+  // native-syscall path for EAC: rip -= 2) makes the frame's RIP equal OriginalRIP again.
+  if (Context->OriginalRIP != guest_uctx->uc_mcontext.gregs[FEXCore::x86_64::FEX_REG_RIP] || Context->FaultToTopAndGeneratedException ||
+      Context->SeccompTrapRIP) {
 
     // Restore previous `InSyscallInfo` structure.
     Frame->InSyscallInfo = Context->InSyscallInfo;
@@ -255,7 +259,7 @@ void SignalDelegator::RestoreFrame_ia32(FEXCore::Core::InternalThreadState* Thre
                                         FEXCore::Core::CpuStateFrame* Frame, void* ucontext) {
   SigFrame_i32* guest_uctx = reinterpret_cast<SigFrame_i32*>(Context->UContextLocation);
   // If the guest modified the RIP then we need to take special precautions here
-  if (Context->OriginalRIP != guest_uctx->sc.ip || Context->FaultToTopAndGeneratedException) {
+  if (Context->OriginalRIP != guest_uctx->sc.ip || Context->FaultToTopAndGeneratedException || Context->SeccompTrapRIP) {
     // Restore previous `InSyscallInfo` structure.
     Frame->InSyscallInfo = Context->InSyscallInfo;
 
@@ -340,7 +344,8 @@ void SignalDelegator::RestoreRTFrame_ia32(FEXCore::Core::InternalThreadState* Th
                                           FEXCore::Core::CpuStateFrame* Frame, void* ucontext) {
   RTSigFrame_i32* guest_uctx = reinterpret_cast<RTSigFrame_i32*>(Context->UContextLocation);
   // If the guest modified the RIP then we need to take special precautions here
-  if (Context->OriginalRIP != guest_uctx->uc.uc_mcontext.gregs[FEXCore::x86::FEX_REG_EIP] || Context->FaultToTopAndGeneratedException) {
+  if (Context->OriginalRIP != guest_uctx->uc.uc_mcontext.gregs[FEXCore::x86::FEX_REG_EIP] || Context->FaultToTopAndGeneratedException ||
+      Context->SeccompTrapRIP) {
 
     // Restore previous `InSyscallInfo` structure.
     Frame->InSyscallInfo = Context->InSyscallInfo;
