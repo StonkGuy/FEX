@@ -59,6 +59,7 @@ decode-race         decode_race_test            PASS -
 syscall-efault      syscall_efault_test         PASS FEX_NEEDSSECCOMP=1
 sigreturn-syscallinfo sigreturn_syscallinfo_test PASS -
 sigsys-redirect     sigsys_redirect_test        PASS FEX_NEEDSSECCOMP=1
+sud-native-retry    sud_native_retry_test       PASS -
 pop-fault           pop_fault_test              FAIL -
 '
 
