@@ -9,6 +9,10 @@ Tested titles: VRChat is verified in game (EAC `301`, online session); Mini Roya
 Results differ from game to game — each title ships its own EAC build and checks — so an untested game may or may not
 work.
 
+**Like it? Help it along.** A star on the repository, an issue when something breaks (with your hardware and the
+log), and pull requests are all welcome. If you keep a fork with a fix or an improvement, please open a pull request
+against `eac-2610` too (with a test in `eac-tests/`): it gets reviewed, credited to you and shipped in the next tag.
+
 Releases are tags on this branch (`eac-2610.1`, `eac-2610.2`, `eac-2610.3`); fixes merged after the latest tag ship in the next one. The write-up — why each patch exists, how it was found,
 results and limits — is in the proof of concept,
 [StonkGuy/eac-arm64-emulation-poc](https://github.com/StonkGuy/eac-arm64-emulation-poc)
