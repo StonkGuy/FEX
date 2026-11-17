@@ -567,6 +567,10 @@ void Dispatcher::EmitDispatcher() {
     str(ARMEmitter::XReg::zr, STATE, offsetof(FEXCore::Core::CpuStateFrame, InSyscallInfo));
 
     {
+      // With TF set the next instruction has to be compiled for single-stepping, as LoopTop does, not taken from the L1.
+      ldrb(TMP1, STATE_PTR(CpuStateFrame, State.flags[X86State::RFLAG_TF_RAW_LOC]));
+      (void)cbnz(ARMEmitter::Size::i32Bit, TMP1, &LoopTop);
+
       // L1 lookup after syscall. Mirrors the implementation in `ExitFunction`.
       // Most syscall instructions just return to the following RIP, so it is highly likely to be in the L1 in tight loops.
       ldr(TMP3, STATE_PTR(CpuStateFrame, State.rip));
