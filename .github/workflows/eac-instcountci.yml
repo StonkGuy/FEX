@@ -1,0 +1,49 @@
+name: eac InstCountCI (Arm64, regenerate)
+
+# Upstream's instcountci.yml runs on FEX-Emu's self-hosted runners only. This runs the same configuration on a
+# GitHub-hosted Arm64 runner for this fork's branches: the InstCountCI tests, then instcountci_update_tests, and
+# uploads the resulting diff of unittests/InstructionCountCI as an artifact to review and commit (it is not committed
+# here). A codegen change in a patch must come with its InstCountCI update.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  instcountci:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    env:
+      CC: clang
+      CXX: clang++
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        fetch-tags: true
+        submodules: recursive
+    - name: Tools
+      run: sudo apt-get update -qq && sudo apt-get install -y -qq clang lld ninja-build cmake python3 nasm >/dev/null
+    - name: Configure
+      run: |
+        cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -G Ninja -DENABLE_VIXL_SIMULATOR=False \
+          -DENABLE_VIXL_DISASSEMBLER=True -DENABLE_LTO=False -DENABLE_ASSERTIONS=True -DENABLE_X86_HOST_DEBUG=True
+    - name: Build
+      env:
+        FEX_DISABLETELEMETRY: 1
+      run: cmake --build build --target CodeSizeValidation instcountci_test_files
+    - name: InstCountCI tests (before the update)
+      continue-on-error: true
+      run: cd build && ctest -R instcountci --output-on-failure -j"$(nproc)" | tail -40
+    - name: Update
+      run: cmake --build build --target instcountci_update_tests
+    - name: Diff
+      run: |
+        git --no-pager diff --stat HEAD | tail -5
+        git diff HEAD > instcountci.diff
+    - uses: actions/upload-artifact@v4
+      with:
+        name: instcountci-diff
+        path: instcountci.diff
