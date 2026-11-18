@@ -38,7 +38,7 @@ jobs:
       run: cmake --build build --target CodeSizeValidation instcountci_test_files
     - name: InstCountCI tests (before the update)
       continue-on-error: true
-      run: cd build && ctest -R instcountci --output-on-failure -j"$(nproc)" | tail -40
+      run: cd build && ctest -R '\.instcountci$' --output-on-failure -j"$(nproc)" 2>&1 | grep -v -E "^ *(Start|[0-9]+/[0-9]+ Test .* Passed)"
     - name: Update
       run: cmake --build build --target instcountci_update_tests
     - name: Diff
