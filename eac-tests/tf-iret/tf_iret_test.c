@@ -16,10 +16,8 @@
 //   4. Wine's CONTEXT_CONTROL syscall return, POPFQ (TF) immediately followed by IRETQ (TF): the trap lands on the
 //      IRETQ target, before its first instruction runs;
 //   5. single-stepping across a call and a return into already translated code: one trap per instruction;
-//   6. (report only, no check yet) single-stepping across a raw syscall into already translated code: prints the
-//      number of traps and the first repetition's trap offsets from case_step_syscall. SYSCALL masks TF and Linux
-//      returns through IRET when the saved flags have TF, so native may skip the trap on the instruction after the
-//      syscall (4 traps rather than 5); assert it once the native x86-64 run has printed it.
+//   6. single-stepping across a raw syscall into already translated code: one trap per instruction, the syscall's
+//      on the instruction after it.
 // The expected RIP for each case is whatever the first repetition on a real kernel reports, printed as an offset from
 // the case's label; the test asserts the offsets the native x86-64 run prints (see EXPECT_* below).
 //
@@ -47,12 +45,10 @@ __attribute__((naked, used)) static void restore_rt(void) { __asm__ volatile("mo
 
 static volatile u64 trap_rip, trap_count;
 static volatile u64 step_until;   // case 5: keep TF until RIP reaches this address
-static volatile u64 trap_rips[8]; // case 6: RIP of each trap
 static void handler(int sig, void* info, void* uc) {
   u64* gregs = (u64*)((char*)uc + 40);
   (void)sig; (void)info;
   trap_rip = gregs[REG_RIP];
-  if (trap_count < 8) trap_rips[trap_count] = gregs[REG_RIP];
   ++trap_count;
   if (!step_until || gregs[REG_RIP] == step_until) gregs[REG_EFL] &= ~0x100UL;
 }
@@ -119,7 +115,7 @@ __asm__(".text\n.globl c5_leaf\nc5_leaf:\n nop\n nop\n ret\n"
         ".globl c5_end\nc5_end:\n ret\n");
 
 // Case 6: single-step across a raw getpid syscall into code that has already run: 5 instructions after the POPFQ
-// (nop, mov, syscall, nop, nop). Report only (see the header).
+// (nop, mov, syscall, nop, nop), one trap each; the syscall's trap lands on the instruction after it.
 extern char c6_end[];
 void case_step_syscall(void);
 void c6_body(void);
@@ -176,24 +172,16 @@ __attribute__((used)) void entry_c(void) {
     check(ok, "5. single-stepping across call/ret into translated code traps once per instruction");
   }
   {
+    int ok = 1;
     // Without TF first, so the code after the syscall is translated and in the lookup caches.
     for (int i = 0; i < 50; ++i) c6_body();
-    i64 first = -1, same = 1;
     for (int i = 0; i < 200; ++i) {
       trap_count = 0; step_until = (u64)c6_end;
       case_step_syscall();
       step_until = 0;
-      if (i == 0) {
-        first = (i64)trap_count;
-        out("  step+syscall: first repetition traps "); outdec(first); out(" times, at case_step_syscall+");
-        for (u64 t = 0; t < trap_count && t < 8; ++t) { if (t) out(","); outdec((i64)(trap_rips[t] - (u64)case_step_syscall)); }
-        out("\n");
-      } else if ((i64)trap_count != first) {
-        same = 0;
-      }
+      if (trap_count != 5) { if (ok) { out("  step+syscall: repetition "); outdec(i); out(" traps "); outdec(trap_count); out(" times\n"); } ok = 0; }
     }
-    out("  6. (report only) single-stepping across a raw syscall: ");
-    out(same ? "every repetition traps as often as the first\n" : "the trap count varies between repetitions\n");
+    check(ok, "6. single-stepping across a raw syscall into translated code traps once per instruction");
   }
   out(failures ? "RESULT: FAIL\n" : "RESULT: PASS\n");
   sc1(SYS_exit_group, failures);
