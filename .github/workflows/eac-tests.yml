@@ -7,9 +7,9 @@ name: eac-tests (FEX on Arm64 + native x86-64 oracle)
 
 on:
   pull_request:
-    branches: [ eac-2610 ]
+    branches: [ eac-2610, eac-2611 ]
   push:
-    branches: [ eac-2610 ]
+    branches: [ eac-2610, eac-2611 ]
   workflow_dispatch:
 
 permissions:
